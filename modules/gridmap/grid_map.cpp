@@ -52,13 +52,17 @@ bool GridMap::_set(const StringName &p_name, const Variant &p_value) {
 			Vector<int> cells = d["cells"];
 			int amount = cells.size();
 			const int *r = cells.ptr();
-			ERR_FAIL_COND_V(amount % 3, false); // not even
+			ERR_FAIL_COND_V(amount % 7, false); // not even
 			cell_map.clear();
-			for (int i = 0; i < amount / 3; i++) {
+			for (int i = 0; i < amount / 7; i++) {
 				IndexKey ik;
-				ik.key = decode_uint64((const uint8_t *)&r[i * 3]);
+				ik.key = decode_uint64((const uint8_t *)&r[i * 7]);
 				Cell cell;
-				cell.cell = decode_uint32((const uint8_t *)&r[i * 3 + 2]);
+				cell.cell = decode_uint32((const uint8_t *)&r[i * 7 + 2]);
+				cell.color.r = decode_float((const uint8_t *)&r[i * 7 + 3]);
+				cell.color.g = decode_float((const uint8_t *)&r[i * 7 + 4]);
+				cell.color.b = decode_float((const uint8_t *)&r[i * 7 + 5]);
+				cell.color.a = decode_float((const uint8_t *)&r[i * 7 + 6]);
 				cell_map[ik] = cell;
 			}
 		}
@@ -100,13 +104,17 @@ bool GridMap::_get(const StringName &p_name, Variant &r_ret) const {
 		Dictionary d;
 
 		Vector<int> cells;
-		cells.resize(cell_map.size() * 3);
+		cells.resize(cell_map.size() * 7);
 		{
 			int *w = cells.ptrw();
 			int i = 0;
 			for (const KeyValue<IndexKey, Cell> &E : cell_map) {
-				encode_uint64(E.key.key, (uint8_t *)&w[i * 3]);
-				encode_uint32(E.value.cell, (uint8_t *)&w[i * 3 + 2]);
+				encode_uint64(E.key.key, (uint8_t *)&w[i * 7]);
+				encode_uint32(E.value.cell, (uint8_t *)&w[i * 7 + 2]);
+				encode_float(E.value.color.r, (uint8_t *)&w[i * 7 + 3]);
+				encode_float(E.value.color.g, (uint8_t *)&w[i * 7 + 4]);
+				encode_float(E.value.color.b, (uint8_t *)&w[i * 7 + 5]);
+				encode_float(E.value.color.a, (uint8_t *)&w[i * 7 + 6]);
 				i++;
 			}
 		}
@@ -322,7 +330,7 @@ bool GridMap::get_center_z() const {
 	return center_z;
 }
 
-void GridMap::set_cell_item(const Vector3i &p_position, int p_item, int p_rot) {
+void GridMap::set_cell_item(const Vector3i &p_position, int p_item, int p_rot, Color p_color) {
 	if (baked_meshes.size() && !recreating_octants) {
 		//if you set a cell item, baked meshes go good bye
 		clear_baked_meshes();
@@ -398,6 +406,7 @@ void GridMap::set_cell_item(const Vector3i &p_position, int p_item, int p_rot) {
 	Cell c;
 	c.item = p_item;
 	c.rot = p_rot;
+	c.color = p_color;
 
 	cell_map[key] = c;
 }
@@ -593,7 +602,7 @@ bool GridMap::_octant_update(const OctantKey &p_key) {
 	 * and set said multimesh bounding box to one containing all cells which have this item
 	 */
 
-	HashMap<int, List<Pair<Transform3D, IndexKey>>> multimesh_items;
+	HashMap<int, List<Pair<Pair<Transform3D, IndexKey>, Color>>> multimesh_items;
 
 	for (const IndexKey &E : g.cells) {
 		ERR_CONTINUE(!cell_map.has(E));
@@ -614,12 +623,13 @@ bool GridMap::_octant_update(const OctantKey &p_key) {
 		if (baked_meshes.size() == 0) {
 			if (mesh_library->get_item_mesh(c.item).is_valid()) {
 				if (!multimesh_items.has(c.item)) {
-					multimesh_items[c.item] = List<Pair<Transform3D, IndexKey>>();
+					multimesh_items[c.item] = List<Pair<Pair<Transform3D, IndexKey>, Color>>();
 				}
 
-				Pair<Transform3D, IndexKey> p;
-				p.first = xform * mesh_library->get_item_mesh_transform(c.item);
-				p.second = E;
+				Pair<Pair<Transform3D, IndexKey>, Color> p;
+				p.first.first = xform * mesh_library->get_item_mesh_transform(c.item);
+				p.first.second = E;
+				p.second = c.color;
 				multimesh_items[c.item].push_back(p);
 			}
 		}
@@ -687,22 +697,23 @@ bool GridMap::_octant_update(const OctantKey &p_key) {
 
 	//update multimeshes, only if not baked
 	if (baked_meshes.size() == 0) {
-		for (const KeyValue<int, List<Pair<Transform3D, IndexKey>>> &E : multimesh_items) {
+		for (const KeyValue<int, List<Pair<Pair<Transform3D, IndexKey>, Color>>> &E : multimesh_items) {
 			Octant::MultimeshInstance mmi;
 
 			RID mm = RS::get_singleton()->multimesh_create();
-			RS::get_singleton()->multimesh_allocate_data(mm, E.value.size(), RS::MULTIMESH_TRANSFORM_3D);
+			RS::get_singleton()->multimesh_allocate_data(mm, E.value.size(), RS::MULTIMESH_TRANSFORM_3D, true);
 			RS::get_singleton()->multimesh_set_mesh(mm, mesh_library->get_item_mesh(E.key)->get_rid());
 
 			int idx = 0;
-			for (const Pair<Transform3D, IndexKey> &F : E.value) {
-				RS::get_singleton()->multimesh_instance_set_transform(mm, idx, F.first);
+			for (const Pair<Pair<Transform3D, IndexKey>, Color> &F : E.value) {
+				RS::get_singleton()->multimesh_instance_set_transform(mm, idx, F.first.first);
+				RS::get_singleton()->multimesh_instance_set_color(mm, idx, F.second);
 #ifdef TOOLS_ENABLED
 
 				Octant::MultimeshInstance::Item it;
 				it.index = idx;
-				it.transform = F.first;
-				it.key = F.second;
+				it.transform = F.first.first;
+				it.key = F.first.second;
 				mmi.items.push_back(it);
 #endif
 
@@ -984,7 +995,7 @@ void GridMap::_recreate_octant_data() {
 	HashMap<IndexKey, Cell, IndexKey> cell_copy = cell_map;
 	_clear_internal();
 	for (const KeyValue<IndexKey, Cell> &E : cell_copy) {
-		set_cell_item(Vector3i(E.key), E.value.item, E.value.rot);
+		set_cell_item(Vector3i(E.key), E.value.item, E.value.rot, E.value.color);
 	}
 	recreating_octants = false;
 }
@@ -1072,7 +1083,7 @@ void GridMap::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_octant_size", "size"), &GridMap::set_octant_size);
 	ClassDB::bind_method(D_METHOD("get_octant_size"), &GridMap::get_octant_size);
 
-	ClassDB::bind_method(D_METHOD("set_cell_item", "position", "item", "orientation"), &GridMap::set_cell_item, DEFVAL(0));
+	ClassDB::bind_method(D_METHOD("set_cell_item", "position", "item", "orientation", "color"), &GridMap::set_cell_item, DEFVAL(0), DEFVAL(Color(0, 0, 0, 1)));
 	ClassDB::bind_method(D_METHOD("get_cell_item", "position"), &GridMap::get_cell_item);
 	ClassDB::bind_method(D_METHOD("get_cell_item_orientation", "position"), &GridMap::get_cell_item_orientation);
 	ClassDB::bind_method(D_METHOD("get_cell_item_basis", "position"), &GridMap::get_cell_item_basis);
