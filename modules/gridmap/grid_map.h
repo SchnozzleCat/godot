@@ -81,14 +81,17 @@ class GridMap : public Node3D {
 	/**
 	 * @brief A Cell is a single cell in the cube map space; it is defined by its coordinates and the populating Item, identified by int id.
 	 */
-	union Cell {
-		struct {
-			unsigned int item : 16;
-			unsigned int rot : 5;
-			unsigned int layer : 8;
-		};
-		uint32_t cell = 0;
-	};
+	struct Cell {
+    union {
+        struct {
+            unsigned int item : 16;
+            unsigned int rot : 5;
+            unsigned int layer : 8;
+        };
+        uint32_t cell = 0;
+    };
+    Color color = Color(0, 0, 0, 1);
+};
 
 	/**
 	 * @brief An Octant is a prism containing Cells, and possibly belonging to an Area.
@@ -274,7 +277,7 @@ public:
 	void set_center_z(bool p_enable);
 	bool get_center_z() const;
 
-	void set_cell_item(const Vector3i &p_position, int p_item, int p_rot = 0);
+	void set_cell_item(const Vector3i &p_position, int p_item, int p_rot = 0, Color p_color = Color(0, 0, 0, 1));
 	int get_cell_item(const Vector3i &p_position) const;
 	int get_cell_item_orientation(const Vector3i &p_position) const;
 	Basis get_cell_item_basis(const Vector3i &p_position) const;
