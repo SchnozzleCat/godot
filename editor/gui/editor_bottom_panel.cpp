@@ -81,9 +81,9 @@ void EditorBottomPanel::_switch_to_item(bool p_visible, int p_idx) {
 		}
 		if (EditorDebuggerNode::get_singleton() == items[p_idx].control) {
 			// This is the debug panel which uses tabs, so the top section should be smaller.
-			add_theme_style_override("panel", get_theme_stylebox(SNAME("BottomPanelDebuggerOverride"), EditorStringName(EditorStyles)));
+			add_theme_style_override(SceneStringName(panel), get_theme_stylebox(SNAME("BottomPanelDebuggerOverride"), EditorStringName(EditorStyles)));
 		} else {
-			add_theme_style_override("panel", get_theme_stylebox(SNAME("BottomPanel"), EditorStringName(EditorStyles)));
+			add_theme_style_override(SceneStringName(panel), get_theme_stylebox(SNAME("BottomPanel"), EditorStringName(EditorStyles)));
 		}
 		center_split->set_dragger_visibility(SplitContainer::DRAGGER_VISIBLE);
 		center_split->set_collapsed(false);
@@ -92,7 +92,7 @@ void EditorBottomPanel::_switch_to_item(bool p_visible, int p_idx) {
 		}
 		expand_button->show();
 	} else {
-		add_theme_style_override("panel", get_theme_stylebox(SNAME("BottomPanel"), EditorStringName(EditorStyles)));
+		add_theme_style_override(SceneStringName(panel), get_theme_stylebox(SNAME("BottomPanel"), EditorStringName(EditorStyles)));
 		items[p_idx].button->set_pressed_no_signal(false);
 		items[p_idx].control->set_visible(false);
 		center_split->set_dragger_visibility(SplitContainer::DRAGGER_HIDDEN);
@@ -178,7 +178,11 @@ Button *EditorBottomPanel::add_item(String p_text, Control *p_item, const Ref<Sh
 	bpi.button = tb;
 	bpi.control = p_item;
 	bpi.name = p_text;
-	items.push_back(bpi);
+	if (p_at_front) {
+		items.insert(0, bpi);
+	} else {
+		items.push_back(bpi);
+	}
 
 	return tb;
 }

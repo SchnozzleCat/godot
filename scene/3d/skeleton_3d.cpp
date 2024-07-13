@@ -265,9 +265,29 @@ void Skeleton3D::_update_process_order() {
 
 	bones_backup.resize(bones.size());
 
+	concatenated_bone_names = StringName();
+
 	process_order_dirty = false;
 
 	emit_signal("bone_list_changed");
+}
+
+void Skeleton3D::_update_bone_names() const {
+	String names;
+	for (int i = 0; i < bones.size(); i++) {
+		if (i > 0) {
+			names += ",";
+		}
+		names += bones[i].name;
+	}
+	concatenated_bone_names = StringName(names);
+}
+
+StringName Skeleton3D::get_concatenated_bone_names() const {
+	if (concatenated_bone_names == StringName()) {
+		_update_bone_names();
+	}
+	return concatenated_bone_names;
 }
 
 #ifndef DISABLE_DEPRECATED
@@ -288,6 +308,7 @@ void Skeleton3D::_notification(int p_what) {
 	switch (p_what) {
 		case NOTIFICATION_ENTER_TREE: {
 			_process_changed();
+			_make_dirty();
 			_make_modifiers_dirty();
 			force_update_all_dirty_bones();
 #ifndef DISABLE_DEPRECATED
@@ -311,6 +332,13 @@ void Skeleton3D::_notification(int p_what) {
 					bones_backup[i].save(bones[i]);
 				}
 				_process_modifiers();
+			}
+
+			// Abort if pose is not changed.
+			if (!(update_flags & UPDATE_FLAG_POSE)) {
+				updating = false;
+				update_flags = UPDATE_FLAG_NONE;
+				return;
 			}
 
 			emit_signal(SceneStringName(skeleton_updated));
@@ -380,13 +408,13 @@ void Skeleton3D::_notification(int p_what) {
 			}
 
 			updating = false;
-			is_update_needed = false;
+			update_flags = UPDATE_FLAG_NONE;
 		} break;
 		case NOTIFICATION_INTERNAL_PROCESS:
 		case NOTIFICATION_INTERNAL_PHYSICS_PROCESS: {
 			_find_modifiers();
 			if (!modifiers.is_empty()) {
-				_update_deferred();
+				_update_deferred(UPDATE_FLAG_MODIFIER);
 			}
 		} break;
 	}
@@ -416,7 +444,7 @@ void Skeleton3D::_process_changed() {
 
 void Skeleton3D::_make_modifiers_dirty() {
 	modifiers_dirty = true;
-	_update_deferred();
+	_update_deferred(UPDATE_FLAG_MODIFIER);
 }
 
 Transform3D Skeleton3D::get_bone_global_pose(int p_bone) const {
@@ -725,10 +753,12 @@ void Skeleton3D::_make_dirty() {
 	_update_deferred();
 }
 
-void Skeleton3D::_update_deferred() {
-	if (!is_update_needed && !updating && is_inside_tree()) {
-		is_update_needed = true;
-		notify_deferred_thread_group(NOTIFICATION_UPDATE_SKELETON); // It must never be called more than once in a single frame.
+void Skeleton3D::_update_deferred(UpdateFlag p_update_flag) {
+	if (is_inside_tree()) {
+		if (update_flags == UPDATE_FLAG_NONE && !updating) {
+			notify_deferred_thread_group(NOTIFICATION_UPDATE_SKELETON); // It must never be called more than once in a single frame.
+		}
+		update_flags |= p_update_flag;
 	}
 }
 
@@ -983,6 +1013,8 @@ void Skeleton3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_bone_name", "bone_idx"), &Skeleton3D::get_bone_name);
 	ClassDB::bind_method(D_METHOD("set_bone_name", "bone_idx", "name"), &Skeleton3D::set_bone_name);
 
+	ClassDB::bind_method(D_METHOD("get_concatenated_bone_names"), &Skeleton3D::get_concatenated_bone_names);
+
 	ClassDB::bind_method(D_METHOD("get_bone_parent", "bone_idx"), &Skeleton3D::get_bone_parent);
 	ClassDB::bind_method(D_METHOD("set_bone_parent", "bone_idx", "parent_idx"), &Skeleton3D::set_bone_parent);
 
@@ -1108,7 +1140,8 @@ void Skeleton3D::set_animate_physical_bones(bool p_enabled) {
 	if (!sim) {
 		return;
 	}
-	sim->set_active(p_enabled);
+	animate_physical_bones = p_enabled;
+	sim->set_active(animate_physical_bones || sim->is_simulating_physics());
 }
 
 bool Skeleton3D::get_animate_physical_bones() const {
@@ -1116,7 +1149,7 @@ bool Skeleton3D::get_animate_physical_bones() const {
 	if (!sim) {
 		return false;
 	}
-	return sim->is_active();
+	return animate_physical_bones;
 }
 
 void Skeleton3D::physical_bones_stop_simulation() {
@@ -1125,7 +1158,7 @@ void Skeleton3D::physical_bones_stop_simulation() {
 		return;
 	}
 	sim->physical_bones_stop_simulation();
-	sim->set_active(false);
+	sim->set_active(animate_physical_bones || sim->is_simulating_physics());
 }
 
 void Skeleton3D::physical_bones_start_simulation_on(const TypedArray<StringName> &p_bones) {

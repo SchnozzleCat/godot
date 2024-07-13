@@ -758,12 +758,13 @@ void Input::_parse_input_event_impl(const Ref<InputEvent> &p_event, bool p_is_em
 
 		bool was_pressed = action_state.cache.pressed;
 		_update_action_cache(E.key, action_state);
+		// As input may come in part way through a physics tick, the earliest we can react to it is the next physics tick.
 		if (action_state.cache.pressed && !was_pressed) {
-			action_state.pressed_physics_frame = Engine::get_singleton()->get_physics_frames();
+			action_state.pressed_physics_frame = Engine::get_singleton()->get_physics_frames() + 1;
 			action_state.pressed_process_frame = Engine::get_singleton()->get_process_frames();
 		}
 		if (!action_state.cache.pressed && was_pressed) {
-			action_state.released_physics_frame = Engine::get_singleton()->get_physics_frames();
+			action_state.released_physics_frame = Engine::get_singleton()->get_physics_frames() + 1;
 			action_state.released_process_frame = Engine::get_singleton()->get_process_frames();
 		}
 	}
@@ -1029,6 +1030,14 @@ void Input::parse_input_event(const Ref<InputEvent> &p_event) {
 	}
 }
 
+#ifdef DEBUG_ENABLED
+void Input::flush_frame_parsed_events() {
+	_THREAD_SAFE_METHOD_
+
+	frame_parsed_events.clear();
+}
+#endif
+
 void Input::flush_buffered_events() {
 	_THREAD_SAFE_METHOD_
 
@@ -1244,7 +1253,7 @@ void Input::_update_action_cache(const StringName &p_action_name, ActionState &r
 	r_action_state.cache.strength = 0.0;
 	r_action_state.cache.raw_strength = 0.0;
 
-	int max_event = InputMap::get_singleton()->action_get_events(p_action_name)->size();
+	int max_event = InputMap::get_singleton()->action_get_events(p_action_name)->size() + 1; // +1 comes from InputEventAction.
 	for (const KeyValue<int, ActionState::DeviceState> &kv : r_action_state.device_states) {
 		const ActionState::DeviceState &device_state = kv.value;
 		for (int i = 0; i < max_event; i++) {
@@ -1496,6 +1505,7 @@ void Input::parse_mapping(const String &p_mapping) {
 		JoyAxis output_axis = _get_output_axis(output);
 		if (output_button == JoyButton::INVALID && output_axis == JoyAxis::INVALID) {
 			print_verbose(vformat("Unrecognized output string \"%s\" in mapping:\n%s", output, p_mapping));
+			continue;
 		}
 		ERR_CONTINUE_MSG(output_button != JoyButton::INVALID && output_axis != JoyAxis::INVALID,
 				vformat("Output string \"%s\" matched both button and axis in mapping:\n%s", output, p_mapping));

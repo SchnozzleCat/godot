@@ -162,6 +162,7 @@ enum PreferredAppMode {
 	APPMODE_MAX = 4
 };
 
+typedef const char *(CDECL *WineGetVersionPtr)(void);
 typedef bool(WINAPI *ShouldAppsUseDarkModePtr)();
 typedef DWORD(WINAPI *GetImmersiveColorFromColorSetExPtr)(UINT dwImmersiveColorSet, UINT dwImmersiveColorType, bool bIgnoreHighContrast, UINT dwHighContrastCacheMode);
 typedef int(WINAPI *GetImmersiveColorTypeFromNamePtr)(const WCHAR *name);
@@ -331,13 +332,18 @@ class DisplayServerWindows : public DisplayServer {
 	String tablet_driver;
 	Vector<String> tablet_drivers;
 
+	enum TimerID {
+		TIMER_ID_MOVE_REDRAW = 1,
+		TIMER_ID_WINDOW_ACTIVATION = 2,
+	};
+
 	enum {
 		KEY_EVENT_BUFFER_SIZE = 512
 	};
 
 	struct KeyEvent {
 		WindowID window_id;
-		bool alt, shift, control, meta;
+		bool alt, shift, control, meta, altgr;
 		UINT uMsg;
 		WPARAM wParam;
 		LPARAM lParam;
@@ -478,12 +484,7 @@ class DisplayServerWindows : public DisplayServer {
 
 	MouseMode mouse_mode;
 	int restore_mouse_trails = 0;
-	bool alt_mem = false;
-	bool gr_mem = false;
-	bool shift_mem = false;
-	bool control_mem = false;
-	bool meta_mem = false;
-	BitField<MouseButtonMask> last_button_state;
+
 	bool use_raw_input = false;
 	bool drop_events = false;
 	bool in_dispatch_input_event = false;
@@ -518,6 +519,15 @@ class DisplayServerWindows : public DisplayServer {
 
 	LRESULT _handle_early_window_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 	Point2i _get_screens_origin() const;
+
+	enum class WinKeyModifierMask {
+		ALT_GR = (1 << 1),
+		SHIFT = (1 << 2),
+		ALT = (1 << 3),
+		META = (1 << 4),
+		CTRL = (1 << 5),
+	};
+	BitField<WinKeyModifierMask> _get_mods() const;
 
 	Error _file_dialog_with_options_show(const String &p_title, const String &p_current_directory, const String &p_root, const String &p_filename, bool p_show_hidden, FileDialogMode p_mode, const Vector<String> &p_filters, const TypedArray<Dictionary> &p_options, const Callable &p_callback, bool p_options_in_cb);
 
