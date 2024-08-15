@@ -74,6 +74,7 @@ public:
 	// Adds an object to the selection history. A property name can be passed if the target is a subresource of the given object.
 	// If the object should not change the main screen plugin, it can be set as inspector only.
 	void add_object(ObjectID p_object, const String &p_property = String(), bool p_inspector_only = false);
+	void replace_object(ObjectID p_old_object, ObjectID p_new_object);
 
 	int get_history_len();
 	int get_history_pos();
@@ -241,6 +242,8 @@ public:
 	bool script_class_is_parent(const String &p_class, const String &p_inherits);
 	StringName script_class_get_base(const String &p_class) const;
 	Variant script_class_instance(const String &p_class);
+	bool script_class_implements_interface(const String &p_class, const String &p_interface);
+	bool script_object_implements_interface(const Ref<Script> &p_script, const String &p_interface); // For non global classes
 
 	Ref<Script> script_class_load_script(const String &p_class) const;
 

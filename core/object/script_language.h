@@ -97,7 +97,6 @@ public:
 	static void get_global_class_list(List<StringName> *r_global_classes);
 	static void get_inheriters_list(const StringName &p_base_type, List<StringName> *r_classes);
 	static void save_global_classes();
-	static String get_global_class_cache_file_path();
 
 	static void init_languages();
 	static void finish_languages();
@@ -178,6 +177,7 @@ public:
 
 	virtual void get_constants(HashMap<StringName, Variant> *p_constants) {}
 	virtual void get_members(HashSet<StringName> *p_constants) {}
+	virtual void get_interfaces(HashSet<StringName> *p_list) {}
 
 	virtual bool is_placeholder_fallback_enabled() const { return false; }
 

@@ -326,7 +326,7 @@ void EditorPropertyArray::update_property() {
 	String array_type_name = Variant::get_type_name(array_type);
 	if (array_type == Variant::ARRAY && subtype != Variant::NIL) {
 		String type_name;
-		if (subtype == Variant::OBJECT && (subtype_hint == PROPERTY_HINT_RESOURCE_TYPE || subtype_hint == PROPERTY_HINT_NODE_TYPE)) {
+		if (subtype == Variant::OBJECT && (subtype_hint == PROPERTY_HINT_RESOURCE_TYPE || subtype_hint == PROPERTY_HINT_NODE_TYPE || subtype_hint == PROPERTY_HINT_INTERFACE)) {
 			type_name = subtype_hint_string;
 		} else {
 			type_name = Variant::get_type_name(subtype);
@@ -907,6 +907,8 @@ void EditorPropertyDictionary::_add_key_value() {
 	VariantInternal::initialize(&new_value, type);
 	object->set_new_item_value(new_value);
 
+	object->set_dict(dict);
+	slots[(dict.size() - 1) % page_length].update_prop_or_index();
 	emit_changed(get_edited_property(), dict);
 }
 
@@ -960,6 +962,10 @@ void EditorPropertyDictionary::_change_type_menu(int p_index) {
 				dict[key] = value;
 			} else {
 				dict.erase(key);
+				object->set_dict(dict);
+				for (Slot &slot : slots) {
+					slot.update_prop_or_index();
+				}
 			}
 
 			emit_changed(get_edited_property(), dict);
