@@ -397,4 +397,9 @@ $RECYCLE.BIN/
 *.lnk
 *.generated.props
 
+###################
+### Added       ###
+###################
+
+.direnv
 modules/godotsteam/sdk
