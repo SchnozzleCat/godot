@@ -352,6 +352,7 @@ void GridMap::set_cell_item(const Vector3i &p_position, int p_item, int p_rot) {
 			cell_map.erase(key);
 
 			_queue_octants_dirty();
+			emit_signal(SNAME("cell_changed"), p_position);
 		}
 		return;
 	}
@@ -398,6 +399,7 @@ void GridMap::set_cell_item(const Vector3i &p_position, int p_item, int p_rot) {
 	c.rot = p_rot;
 
 	cell_map[key] = c;
+	emit_signal(SNAME("cell_changed"), p_position);
 }
 
 int GridMap::get_cell_item(const Vector3i &p_position) const {
@@ -1343,6 +1345,7 @@ void GridMap::_bind_methods() {
 	BIND_CONSTANT(INVALID_CELL_ITEM);
 
 	ADD_SIGNAL(MethodInfo("cell_size_changed", PropertyInfo(Variant::VECTOR3, "cell_size")));
+	ADD_SIGNAL(MethodInfo("cell_changed", PropertyInfo(Variant::VECTOR3I, "cell")));
 	ADD_SIGNAL(MethodInfo(CoreStringName(changed)));
 }
 

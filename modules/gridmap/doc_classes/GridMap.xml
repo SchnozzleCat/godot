@@ -288,6 +288,12 @@
 				Emitted when [member cell_size] changes.
 			</description>
 		</signal>
+		<signal name="cell_changed">
+			<param index="0" name="cell" type="Vector3i" />
+			<description>
+				Emitted when [member cell] item changes.
+			</description>
+		</signal>
 		<signal name="changed">
 			<description>
 				Emitted when the [MeshLibrary] of this GridMap changes.
