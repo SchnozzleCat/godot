@@ -321,9 +321,19 @@ namespace Godot.SourceGenerators
 
         private static void AppendPropertyInfo(StringBuilder source, PropertyInfo propertyInfo)
         {
-            source.Append("new(type: (global::Godot.Variant.Type)")
-                .Append((int)propertyInfo.Type)
-                .Append(", name: \"")
+            if (propertyInfo.VariantType.HasValue)
+            {
+                source.Append("new(type: (global::Godot.Variant.Type)")
+                    .Append((int)propertyInfo.VariantType)
+                    .Append(", ");
+            }
+            else
+            {
+                source.Append("global::Godot.Bridge.GenericUtils.PropertyInfoFromGenericType<")
+                    .Append(propertyInfo.PropertyType!.FullQualifiedNameIncludeGlobal())
+                    .Append(">(");
+            }
+            source.Append("name: \"")
                 .Append(propertyInfo.Name)
                 .Append("\", hint: (global::Godot.PropertyHint)")
                 .Append((int)propertyInfo.Hint)
@@ -333,6 +343,7 @@ namespace Godot.SourceGenerators
                 .Append((int)propertyInfo.Usage)
                 .Append(", exported: ")
                 .Append(propertyInfo.Exported ? "true" : "false");
+
             if (propertyInfo.ClassName != null)
             {
                 source.Append(", className: new global::Godot.StringName(\"")
@@ -354,7 +365,7 @@ namespace Godot.SourceGenerators
             }
             else
             {
-                returnVal = new PropertyInfo(VariantType.Nil, string.Empty, PropertyHint.None,
+                returnVal = new PropertyInfo(VariantType.Nil, null, string.Empty, PropertyHint.None,
                     hintString: null, PropertyUsageFlags.Default, exported: false);
             }
 
@@ -391,20 +402,24 @@ namespace Godot.SourceGenerators
 
         private static PropertyInfo DeterminePropertyInfo(MarshalType marshalType, ITypeSymbol typeSymbol, string name)
         {
-            var memberVariantType = MarshalUtils.ConvertMarshalTypeToVariantType(marshalType)!.Value;
+            var memberVariantType = MarshalUtils.ConvertMarshalTypeToVariantType(marshalType);
 
             var propUsage = PropertyUsageFlags.Default;
 
-            if (memberVariantType == VariantType.Nil)
-                propUsage |= PropertyUsageFlags.NilIsVariant;
-
             string? className = null;
-            if (memberVariantType == VariantType.Object && typeSymbol is INamedTypeSymbol namedTypeSymbol)
+
+            if (memberVariantType.HasValue)
             {
-                className = namedTypeSymbol.GetGodotScriptNativeClassName();
+                if (memberVariantType == VariantType.Nil)
+                    propUsage |= PropertyUsageFlags.NilIsVariant;
+
+                if (memberVariantType == VariantType.Object && typeSymbol is INamedTypeSymbol namedTypeSymbol)
+                {
+                    className = namedTypeSymbol.GetGodotScriptNativeClassName();
+                }
             }
 
-            return new PropertyInfo(memberVariantType, name,
+            return new PropertyInfo(memberVariantType, typeSymbol, name,
                 PropertyHint.None, string.Empty, propUsage, className, exported: false);
         }
 

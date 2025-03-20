@@ -378,9 +378,20 @@ namespace Godot.SourceGenerators
 
         private static void AppendPropertyInfo(StringBuilder source, PropertyInfo propertyInfo)
         {
-            source.Append("        properties.Add(new(type: (global::Godot.Variant.Type)")
-                .Append((int)propertyInfo.Type)
-                .Append(", name: PropertyName.@")
+            source.Append("        properties.Add(");
+            if (propertyInfo.VariantType.HasValue)
+            {
+                source.Append("new(type: (global::Godot.Variant.Type)")
+                    .Append((int)propertyInfo.VariantType)
+                    .Append(", ");
+            }
+            else
+            {
+                source.Append("global::Godot.Bridge.GenericUtils.PropertyInfoFromGenericType<")
+                    .Append(propertyInfo.PropertyType!.FullQualifiedNameIncludeGlobal())
+                    .Append(">(");
+            }
+            source.Append("name: PropertyName.@")
                 .Append(propertyInfo.Name)
                 .Append(", hint: (global::Godot.PropertyHint)")
                 .Append((int)propertyInfo.Hint)
@@ -389,8 +400,16 @@ namespace Godot.SourceGenerators
                 .Append("\", usage: (global::Godot.PropertyUsageFlags)")
                 .Append((int)propertyInfo.Usage)
                 .Append(", exported: ")
-                .Append(propertyInfo.Exported ? "true" : "false")
-                .Append("));\n");
+                .Append(propertyInfo.Exported ? "true" : "false");
+
+            if (propertyInfo.ClassName != null)
+            {
+                source.Append(", className: new global::Godot.StringName(\"")
+                    .Append(propertyInfo.ClassName)
+                    .Append("\")");
+            }
+
+            source.Append("));\n");
         }
 
         private static IEnumerable<PropertyInfo> DetermineGroupingPropertyInfo(ISymbol memberSymbol)
@@ -414,7 +433,7 @@ namespace Godot.SourceGenerators
                     if (propertyUsage != PropertyUsageFlags.Category && attr.ConstructorArguments.Length > 1)
                         hintString = attr.ConstructorArguments[1].Value?.ToString();
 
-                    yield return new PropertyInfo(VariantType.Nil, name, PropertyHint.None, hintString,
+                    yield return new PropertyInfo(VariantType.Nil, null, name, PropertyHint.None, hintString,
                         propertyUsage.Value, true);
                 }
             }
@@ -556,7 +575,7 @@ namespace Godot.SourceGenerators
 
             var memberType = propertySymbol?.Type ?? fieldSymbol!.Type;
 
-            var memberVariantType = MarshalUtils.ConvertMarshalTypeToVariantType(marshalType)!.Value;
+            var memberVariantType = MarshalUtils.ConvertMarshalTypeToVariantType(marshalType);
             string memberName = memberSymbol.Name;
 
             string? hintString = null;
@@ -582,18 +601,20 @@ namespace Godot.SourceGenerators
                     }
                 }
 
-                return new PropertyInfo(memberVariantType, memberName, PropertyHint.ToolButton,
+                return new PropertyInfo(memberVariantType, memberType,  memberName, PropertyHint.ToolButton,
                     hintString: hintString, PropertyUsageFlags.Editor, exported: true);
             }
 
             if (exportAttr == null)
             {
-                return new PropertyInfo(memberVariantType, memberName, PropertyHint.None,
+                return new PropertyInfo(memberVariantType, memberType, memberName, PropertyHint.None,
                     hintString: hintString, PropertyUsageFlags.ScriptVariable, exported: false);
             }
 
-            if (!TryGetMemberExportHint(typeCache, memberType, exportAttr, memberVariantType,
-                    isTypeArgument: false, out var hint, out hintString))
+            TryGetNodeOrResourceType(exportAttr, out var hint, out hintString);
+
+            if (memberVariantType.HasValue && !TryGetMemberExportHint(typeCache, memberType, exportAttr, memberVariantType.Value,
+                    isTypeArgument: false, out hint, out hintString))
             {
                 var constructorArguments = exportAttr.ConstructorArguments;
 
@@ -623,7 +644,7 @@ namespace Godot.SourceGenerators
             if (memberVariantType == VariantType.Nil)
                 propUsage |= PropertyUsageFlags.NilIsVariant;
 
-            return new PropertyInfo(memberVariantType, memberName,
+            return new PropertyInfo(memberVariantType, memberType, memberName,
                 hint, hintString, propUsage, exported: true);
         }
 
@@ -733,36 +754,6 @@ namespace Godot.SourceGenerators
                 }
             }
 
-            static bool TryGetNodeOrResourceType(AttributeData exportAttr, out PropertyHint hint, out string? hintString)
-            {
-                hint = PropertyHint.None;
-                hintString = null;
-
-                if (exportAttr.ConstructorArguments.Length <= 1) return false;
-
-                var hintValue = exportAttr.ConstructorArguments[0].Value;
-
-                var hintEnum = hintValue switch
-                {
-                    null => PropertyHint.None,
-                    int intValue => (PropertyHint)intValue,
-                    _ => (PropertyHint)(long)hintValue
-                };
-
-                if (!hintEnum.HasFlag(PropertyHint.NodeType) && !hintEnum.HasFlag(PropertyHint.ResourceType))
-                    return false;
-
-                var hintStringValue = exportAttr.ConstructorArguments[1].Value?.ToString();
-                if (string.IsNullOrWhiteSpace(hintStringValue))
-                {
-                    return false;
-                }
-
-                hint = hintEnum;
-                hintString = hintStringValue;
-
-                return true;
-            }
 
             static string GetTypeName(INamedTypeSymbol memberSymbol)
             {
@@ -942,6 +933,37 @@ namespace Godot.SourceGenerators
             }
 
             return false;
+        }
+
+        private static bool TryGetNodeOrResourceType(AttributeData exportAttr, out PropertyHint hint, out string? hintString)
+        {
+            hint = PropertyHint.None;
+            hintString = null;
+
+            if (exportAttr.ConstructorArguments.Length <= 1) return false;
+
+            var hintValue = exportAttr.ConstructorArguments[0].Value;
+
+            var hintEnum = hintValue switch
+            {
+                null => PropertyHint.None,
+                int intValue => (PropertyHint)intValue,
+                _ => (PropertyHint)(long)hintValue
+            };
+
+            if (!hintEnum.HasFlag(PropertyHint.NodeType) && !hintEnum.HasFlag(PropertyHint.ResourceType))
+                return false;
+
+            var hintStringValue = exportAttr.ConstructorArguments[1].Value?.ToString();
+            if (string.IsNullOrWhiteSpace(hintStringValue))
+            {
+                return false;
+            }
+
+            hint = hintEnum;
+            hintString = hintStringValue;
+
+            return true;
         }
     }
 }

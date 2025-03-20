@@ -44,7 +44,7 @@
             fontconfig
             fontconfig.lib
             udev
-            dotnetCorePackages.sdk_9_0
+            dotnetCorePackages.sdk_8_0
             scons
           ];
         });
