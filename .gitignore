@@ -386,3 +386,11 @@ $RECYCLE.BIN/
 *.msp
 *.lnk
 *.generated.props
+
+
+###################
+### Added       ###
+###################
+
+.direnv
+
