@@ -75,5 +75,7 @@ namespace Godot.SourceGenerators
         GenericType,
         GenericGodotGenericDictionary,
         GenericGodotGenericArray,
+        // Interface - Nodes or Resources
+        GodotObjectInterface,
     }
 }

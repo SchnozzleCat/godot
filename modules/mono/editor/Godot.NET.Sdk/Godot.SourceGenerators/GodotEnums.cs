@@ -90,7 +90,8 @@ namespace Godot.SourceGenerators
         LayersAvoidance = 37,
         DictionaryType = 38,
         ToolButton = 39,
-        Max = 40
+        Interface = 40,
+        Max = 41
     }
 
     [Flags]
