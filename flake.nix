@@ -72,7 +72,11 @@
           # stdenv = pkgs.clangStdenv;
         }
         {
-          GODOT_VERSION_STATUS = "SchnozzleCat-custom";
+        {
+          # Per-commit status matching the system flake convention:
+          #   suffix = "schnozzlecat-" + first 4 chars of the commit hash
+          # Must stay in sync with fullrebuild.bat on Windows.
+          GODOT_VERSION_STATUS = "schnozzlecat-${lib.substring 0 4 (self.shortRev or self.rev or "0000")}";
           packages =
             deps
             ++ self.scripts pkgs;
