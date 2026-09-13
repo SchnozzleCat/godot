@@ -18,7 +18,13 @@ from misc.utility.color import print_error, print_info, print_warning
 from platform_methods import detect_arch
 
 # Get the "Godot" folder name ahead of time
-base_folder = Path(__file__).resolve().parent
+try:
+    base_folder = Path(__file__).resolve().parent
+except OSError:
+    # Path.resolve() fails on VM file shares (e.g. WinFsp/VBoxSVR/HGFS return
+    # WinError 1005 from GetFinalPathNameByHandle). Fall back to the absolute
+    # path without symlink resolution; a share can't contain symlinks anyway.
+    base_folder = Path(__file__).absolute().parent
 
 compiler_version_cache = None
 
@@ -97,7 +103,11 @@ def redirect_emitter(target, source, env):
 
     redirected_targets = []
     for item in target:
-        path = Path(item.get_abspath()).resolve()
+        try:
+            path = Path(item.get_abspath()).resolve()
+        except OSError:
+            # Same WinFsp/VM-share limitation as base_folder above.
+            path = Path(item.get_abspath()).absolute()
 
         if path.parent == base_folder / "bin":
             pass
