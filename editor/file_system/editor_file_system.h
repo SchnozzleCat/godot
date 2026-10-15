@@ -66,6 +66,9 @@ class EditorFileSystemDirectory : public Object {
 		String import_group_file;
 		Vector<String> deps;
 		bool verified = false; //used for checking changes
+		// Asset Vault: a ".vault" sidecar exists next to this file — the asset is
+		// encrypted on export (per-asset key = HKDF(master, uid:tag)).
+		bool vault_encrypted = false;
 		// This is for script resources only.
 		struct ScriptClassInfo {
 			String name;
@@ -99,6 +102,7 @@ public:
 	bool get_file_import_is_valid(int p_idx) const;
 	uint64_t get_file_modified_time(int p_idx) const;
 	uint64_t get_file_import_modified_time(int p_idx) const;
+	bool is_file_vault_encrypted(int p_idx) const;
 	String get_file_script_class_name(int p_idx) const; //used for scripts
 	String get_file_script_class_extends(int p_idx) const; //used for scripts
 	String get_file_script_class_icon_path(int p_idx) const; //used for scripts

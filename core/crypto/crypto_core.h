@@ -118,4 +118,25 @@ public:
 	static Error md5(const uint8_t *p_src, size_t p_src_len, unsigned char r_hash[16]);
 	static Error sha1(const uint8_t *p_src, size_t p_src_len, unsigned char r_hash[20]);
 	static Error sha256(const uint8_t *p_src, size_t p_src_len, unsigned char r_hash[32]);
+
+	// RFC 5869 HKDF with SHA-256 (extract-and-expand).
+	static Error hkdf_sha256(const uint8_t *p_secret, size_t p_secret_len,
+			const uint8_t *p_salt, size_t p_salt_len,
+			const uint8_t *p_info, size_t p_info_len,
+			uint8_t *r_dst, size_t p_dst_len);
+
+	// AES-128-GCM AEAD (used by the asset vault). r_tag is 16 bytes.
+	// Authenticated-but-unencrypted data is passed via p_aad/p_aad_len.
+	static Error aes_gcm_encrypt(const uint8_t *p_key, size_t p_key_len,
+			const uint8_t *p_nonce, size_t p_nonce_len,
+			const uint8_t *p_aad, size_t p_aad_len,
+			const uint8_t *p_src, size_t p_src_len,
+			uint8_t *r_dst, uint8_t r_tag[16]);
+	// Returns ERR_FILE_CORRUPT on authentication failure.
+	static Error aes_gcm_decrypt(const uint8_t *p_key, size_t p_key_len,
+			const uint8_t *p_nonce, size_t p_nonce_len,
+			const uint8_t *p_aad, size_t p_aad_len,
+			const uint8_t *p_tag, size_t p_tag_len,
+			const uint8_t *p_src, size_t p_src_len,
+			uint8_t *r_dst);
 };

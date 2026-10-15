@@ -86,6 +86,7 @@ public:
 		bool encrypted = false;
 		bool removal = false;
 		bool delta = false;
+		bool vault = false; // Asset Vault container (GVAU); decrypt-on-open via AssetVault keys.
 		Vector<uint8_t> md5;
 		CharString path_utf8;
 
@@ -109,6 +110,9 @@ public:
 	static Error _encrypt_and_store_data(Ref<FileAccess> p_fd, const String &p_path, const Vector<uint8_t> &p_data, const Vector<String> &p_enc_in_filters, const Vector<String> &p_enc_ex_filters, const Vector<uint8_t> &p_key, uint64_t p_seed, bool &r_encrypt);
 	static String _get_script_encryption_key(const Ref<EditorExportPreset> &p_preset);
 	static Vector<uint8_t> _get_script_encryption_key_bytes(const Ref<EditorExportPreset> &p_preset);
+	// Asset Vault master key bytes (hex, >= 32 bytes recommended): env
+	// GODOT_VAULT_MASTERKEY overrides the preset property. Empty if unset/invalid.
+	static Vector<uint8_t> _get_vault_masterkey_bytes(const Ref<EditorExportPreset> &p_preset);
 
 private:
 	struct ZipData {
@@ -152,7 +156,11 @@ private:
 		Vector<uint8_t> uids;
 	};
 
-	static FilteredCache _get_filtered_cache(const HashSet<String> &p_paths);
+	// p_vault_map maps assets flagged for vault encryption (via ".vault"
+	// sidecars) to their uniform in-pack "res://.vault/<uid-text>.enc" paths, so
+	// the exported uid_cache resolves their uids to the vault paths and never
+	// carries their original paths.
+	static FilteredCache _get_filtered_cache(const HashSet<String> &p_paths, const HashMap<String, String> &p_vault_map);
 
 	struct FileExportCache {
 		uint64_t source_modified_time = 0;

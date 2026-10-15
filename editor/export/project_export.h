@@ -131,6 +131,12 @@ class ProjectExportDialog : public ConfirmationDialog {
 	Button *show_script_key = nullptr;
 	Label *script_key_error = nullptr;
 
+	// Asset Vault master key (hex, >= 32 bytes; env GODOT_VAULT_MASTERKEY
+	// overrides). Per-asset keys are derived at export: HKDF(master, uid:tag).
+	LineEdit *vault_key = nullptr;
+	Button *show_vault_key = nullptr;
+	Label *vault_key_error = nullptr;
+
 	ProjectExportTextureFormatError *export_texture_format_error = nullptr;
 	Label *export_error = nullptr;
 	Label *export_error2 = nullptr;
@@ -212,6 +218,7 @@ class ProjectExportDialog : public ConfirmationDialog {
 	void _custom_features_changed(const String &p_text);
 
 	bool updating_script_key = false;
+	bool updating_vault_key = false;
 	bool updating_enc_filters = false;
 	bool updating_seed = false;
 	void _enc_pck_changed(bool p_pressed);
@@ -220,6 +227,10 @@ class ProjectExportDialog : public ConfirmationDialog {
 	void _seed_input_changed(const String &p_text);
 	void _script_encryption_key_changed(const String &p_key);
 	void _script_encryption_key_visibility_changed(bool p_visible);
+
+	void _vault_masterkey_changed(const String &p_key);
+	void _vault_masterkey_visibility_changed(bool p_visible);
+	bool _validate_vault_masterkey(const String &p_key);
 	bool _validate_script_encryption_key(const String &p_key);
 
 	void _script_export_mode_changed(EditorExportPreset::ScriptExportMode p_mode);

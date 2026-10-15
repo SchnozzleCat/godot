@@ -40,6 +40,7 @@ public:
 	virtual void get_recognized_extensions(List<String> *p_extensions) const override;
 	virtual bool handles_type(const String &p_type) const override;
 	virtual String get_resource_type(const String &p_path) const override;
+	virtual bool recognize_path(const String &p_path, const String &p_for_type = String()) const override;
 };
 
 class ResourceFormatLoaderCompressedTextureLayered : public ResourceFormatLoader {
@@ -50,6 +51,7 @@ public:
 	virtual void get_recognized_extensions(List<String> *p_extensions) const override;
 	virtual bool handles_type(const String &p_type) const override;
 	virtual String get_resource_type(const String &p_path) const override;
+	virtual bool recognize_path(const String &p_path, const String &p_for_type = String()) const override;
 };
 
 class ResourceFormatLoaderCompressedTexture3D : public ResourceFormatLoader {
@@ -60,4 +62,5 @@ public:
 	virtual void get_recognized_extensions(List<String> *p_extensions) const override;
 	virtual bool handles_type(const String &p_type) const override;
 	virtual String get_resource_type(const String &p_path) const override;
+	virtual bool recognize_path(const String &p_path, const String &p_for_type = String()) const override;
 };

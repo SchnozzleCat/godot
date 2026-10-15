@@ -103,6 +103,7 @@ void EditorExport::_save() {
 		config->set_value(section, "encrypt_directory", preset->get_enc_directory());
 		config->set_value(section, "script_export_mode", preset->get_script_export_mode());
 		credentials->set_value(section, "script_encryption_key", preset->get_script_encryption_key());
+		credentials->set_value(section, "vault_masterkey", preset->get_vault_masterkey());
 
 		String option_section = "preset." + itos(i) + ".options";
 
@@ -414,6 +415,9 @@ void EditorExport::load_config() {
 		}
 		if (credentials->has_section_key(section, "script_encryption_key")) {
 			preset->set_script_encryption_key(credentials->get_value(section, "script_encryption_key"));
+		}
+		if (credentials->has_section_key(section, "vault_masterkey")) {
+			preset->set_vault_masterkey(credentials->get_value(section, "vault_masterkey"));
 		}
 
 		String option_section = "preset." + itos(index) + ".options";

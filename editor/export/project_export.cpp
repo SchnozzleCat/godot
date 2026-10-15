@@ -125,6 +125,7 @@ void ProjectExportDialog::_notification(int p_what) {
 			patch_add_btn->set_button_icon(get_editor_theme_icon(SNAME("Add")));
 
 			script_key_error->add_theme_color_override(SceneStringName(font_color), EditorNode::get_singleton()->get_editor_theme()->get_color(SNAME("error_color"), EditorStringName(Editor)));
+			vault_key_error->add_theme_color_override(SceneStringName(font_color), EditorNode::get_singleton()->get_editor_theme()->get_color(SNAME("error_color"), EditorStringName(Editor)));
 			export_error->add_theme_color_override(SceneStringName(font_color), EditorNode::get_singleton()->get_editor_theme()->get_color(SNAME("error_color"), EditorStringName(Editor)));
 			export_error2->add_theme_color_override(SceneStringName(font_color), EditorNode::get_singleton()->get_editor_theme()->get_color(SNAME("error_color"), EditorStringName(Editor)));
 			export_warning->add_theme_color_override(SceneStringName(font_color), EditorNode::get_singleton()->get_editor_theme()->get_color(SNAME("warning_color"), EditorStringName(Editor)));
@@ -132,6 +133,7 @@ void ProjectExportDialog::_notification(int p_what) {
 
 		case NOTIFICATION_TRANSLATION_CHANGED: {
 			script_key_error->set_text(String::utf8("•  ") + TTR("Invalid Encryption Key (must be 64 hexadecimal characters long)"));
+			vault_key_error->set_text(String::utf8("•  ") + TTR("Invalid Vault Master Key (must be at least 64 hexadecimal characters / 32 bytes)"));
 			export_error2->set_text(String::utf8("•  ") + TTR("Export templates for this platform are missing:") + " ");
 		} break;
 
@@ -451,6 +453,17 @@ void ProjectExportDialog::_edit_preset(int p_index) {
 		script_key_error->hide();
 	}
 
+	String vault_key_str = current->get_vault_masterkey();
+	if (!updating_vault_key) {
+		vault_key->set_text(vault_key_str);
+	}
+	if (_validate_vault_masterkey(vault_key_str)) {
+		vault_key_error->hide();
+	} else {
+		vault_key_error->set_text(TTRC("Error: Vault master key must be a hexadecimal string of at least 64 characters (32 bytes)."));
+		vault_key_error->show();
+	}
+
 	int script_export_mode = int(current->get_script_export_mode());
 	script_mode->select(script_export_mode);
 
@@ -707,6 +720,36 @@ void ProjectExportDialog::_script_encryption_key_visibility_changed(bool p_visib
 	script_key->set_secret(!p_visible);
 }
 
+void ProjectExportDialog::_vault_masterkey_changed(const String &p_key) {
+	if (updating) {
+		return;
+	}
+
+	Ref<EditorExportPreset> current = get_current_preset();
+	ERR_FAIL_COND(current.is_null());
+
+	current->set_vault_masterkey(p_key);
+
+	updating_vault_key = true;
+	_update_current_preset();
+	updating_vault_key = false;
+}
+
+void ProjectExportDialog::_vault_masterkey_visibility_changed(bool p_visible) {
+	show_vault_key->set_button_icon(get_editor_theme_icon(p_visible ? SNAME("GuiVisibilityVisible") : SNAME("GuiVisibilityHidden")));
+	show_vault_key->set_tooltip_text(p_visible ? TTRC("Hide vault master key") : TTRC("Show vault master key"));
+	vault_key->set_secret(!p_visible);
+}
+
+bool ProjectExportDialog::_validate_vault_masterkey(const String &p_key) {
+	// Empty is valid (export hard-errors if vault assets exist without a key,
+	// e.g. when relying on the GODOT_VAULT_MASTERKEY environment override).
+	if (p_key.is_empty()) {
+		return true;
+	}
+	return p_key.is_valid_hex_number(false) && p_key.length() >= 64; // 32+ bytes, hex.
+}
+
 bool ProjectExportDialog::_validate_script_encryption_key(const String &p_key) {
 	bool is_valid = false;
 
@@ -779,6 +822,7 @@ void ProjectExportDialog::_duplicate_preset() {
 	preset->set_enc_pck(current->get_enc_pck());
 	preset->set_enc_directory(current->get_enc_directory());
 	preset->set_script_encryption_key(current->get_script_encryption_key());
+	preset->set_vault_masterkey(current->get_vault_masterkey());
 	preset->set_script_export_mode(current->get_script_export_mode());
 
 	for (const KeyValue<StringName, Variant> &E : current->get_values()) {
@@ -1905,6 +1949,33 @@ ProjectExportDialog::ProjectExportDialog() {
 	script_key_error->set_focus_mode(Control::FOCUS_ACCESSIBILITY);
 	sec_vb->add_margin_child(TTRC("Encryption Key (256-bits as hexadecimal):"), encryption_hb);
 	sec_vb->add_child(script_key_error);
+
+	// Asset Vault master key: per-asset keys are derived at export via
+	// HKDF(master, uid:tag) — never embedded; the exported game receives
+	// per-asset keys from the key-granting server at runtime.
+	vault_key = memnew(LineEdit);
+	vault_key->set_h_size_flags(Control::SIZE_EXPAND_FILL);
+	vault_key->set_accessibility_name(TTRC("Asset Vault Master Key (hex, 32+ bytes recommended):"));
+	vault_key->connect(SceneStringName(text_changed), callable_mp(this, &ProjectExportDialog::_vault_masterkey_changed));
+	vault_key->set_secret(true);
+
+	show_vault_key = memnew(Button);
+	show_vault_key->set_toggle_mode(true);
+	show_vault_key->connect(SceneStringName(toggled), callable_mp(this, &ProjectExportDialog::_vault_masterkey_visibility_changed));
+
+	HBoxContainer *vault_encryption_hb = memnew(HBoxContainer);
+	vault_encryption_hb->add_child(vault_key);
+	vault_encryption_hb->add_child(show_vault_key);
+
+	vault_key_error = memnew(Label);
+	vault_key_error->set_focus_mode(Control::FOCUS_ACCESSIBILITY);
+	sec_vb->add_margin_child(TTRC("Asset Vault Master Key (hex, 32+ bytes recommended):"), vault_encryption_hb);
+	sec_vb->add_child(vault_key_error);
+
+	Label *vault_key_info = memnew(Label);
+	vault_key_info->set_focus_mode(Control::FOCUS_ACCESSIBILITY);
+	vault_key_info->set_text(TTRC("Note: The vault master key is stored in plaintext in\n.godot/export_credentials.cfg; prefer the GODOT_VAULT_MASTERKEY\nenvironment variable for real projects. Per-asset keys are derived\nat export (HKDF-SHA256) and granted at runtime via AssetVault."));
+	sec_vb->add_child(vault_key_info);
 	sections->add_child(sec_scroll_container);
 
 	seed_input = memnew(LineEdit);
@@ -1943,6 +2014,7 @@ ProjectExportDialog::ProjectExportDialog() {
 	duplicate_preset->set_disabled(true);
 	delete_preset->set_disabled(true);
 	script_key_error->hide();
+	vault_key_error->hide();
 	parameters->edit(nullptr);
 
 	// Label shown when no presets are present.

@@ -32,9 +32,13 @@ if not has_module:
     thirdparty_mbedtls_sources = [
         "aes.c",
         "base64.c",
+        "cipher.c",
+        "cipher_wrap.c",
         "constant_time.c",
         "ctr_drbg.c",
         "entropy.c",
+        "gcm.c",
+        "hkdf.c",
         "md.c",
         "md5.c",
         "sha1.c",
@@ -53,6 +57,20 @@ elif is_builtin:
     env_crypto.Append(CPPDEFINES=[("MBEDTLS_CONFIG_FILE", config_path)])
     # Needed to force rebuilding the core files when the configuration file is updated.
     thirdparty_obj = ["#thirdparty/mbedtls/include/godot_module_mbedtls_config.h"]
+
+# HKDF (RFC 5869) is required by CryptoCore::hkdf_sha256 (asset vault key
+# derivation). It must be compiled as part of core: nothing in the mbedtls
+# module's object graph references it, so the linker would never pull it from
+# the module archive (which is linked before libcore.a). It is excluded from
+# the module build (see modules/mbedtls/SCsub) to avoid duplicate definitions.
+if is_builtin and has_module:
+    env_hkdf = env_crypto.Clone()
+    env_hkdf.disable_warnings()
+    hkdf_obj = []
+    env_hkdf.add_source_files(hkdf_obj, ["#thirdparty/mbedtls/library/hkdf.c"])
+    env.core_sources += hkdf_obj
+    # Needed to force rebuilding the object when the configuration file is updated.
+    env_hkdf.Depends(hkdf_obj, "#thirdparty/mbedtls/include/godot_module_mbedtls_config.h")
 
 # Godot source files
 

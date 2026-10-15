@@ -129,6 +129,8 @@ private:
 		FILE_MENU_COPY_PATH,
 		FILE_MENU_COPY_ABSOLUTE_PATH,
 		FILE_MENU_COPY_UID,
+		FILE_MENU_TOGGLE_VAULT,
+		FILE_MENU_ROTATE_VAULT_KEY,
 		FILE_MENU_EXPAND_ALL,
 		FILE_MENU_COLLAPSE_ALL,
 		FILE_MENU_NEW_RESOURCE,
@@ -276,6 +278,10 @@ private:
 	void _reselect_items_selected_on_drag_begin(bool reset = false);
 
 	Ref<Texture2D> _get_tree_item_icon(bool p_is_valid, const String &p_file_type, const String &p_icon_path);
+	// Asset Vault: composites a lock badge into the bottom-right corner of an
+	// icon (cached per source icon instance).
+	Ref<Texture2D> _apply_vault_badge(const Ref<Texture2D> &p_icon) const;
+	mutable HashMap<ObjectID, Ref<Texture2D>> vault_badge_cache;
 	void _create_tree(TreeItem *p_parent, EditorFileSystemDirectory *p_dir, const Vector<String> &p_uncollapsed_paths, const Vector<String> &p_selected_paths);
 	void _update_tree(const Vector<String> &p_uncollapsed_paths = Vector<String>(), bool p_uncollapse_root = false, bool p_scroll_to_selected = true, const Vector<String> &p_override_selection = Vector<String>());
 	void _navigate_to_path(const String &p_path, bool p_select_in_favorites = false, bool p_grab_focus = false);

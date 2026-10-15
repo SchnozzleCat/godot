@@ -34,6 +34,7 @@
 #include "core/config/project_settings.h"
 #include "core/crypto/crypto_core.h"
 #include "core/extension/gdextension.h"
+#include "core/io/asset_vault.h"
 #include "core/io/delta_encoding.h"
 #include "core/io/dir_access.h"
 #include "core/io/file_access_encrypted.h"
@@ -43,6 +44,7 @@
 #include "core/io/resource_loader.h"
 #include "core/io/resource_saver.h"
 #include "core/io/resource_uid.h"
+#include "core/io/vault_container.h"
 #include "core/io/zip_io.h"
 #include "core/math/random_pcg.h"
 #include "core/object/class_db.h"
@@ -52,6 +54,7 @@
 #include "core/version.h"
 #include "editor/editor_node.h"
 #include "editor/editor_string_names.h"
+#include "editor/editor_vault.h"
 #include "editor/export/editor_export.h"
 #include "editor/export/editor_export_plugin.h"
 #include "editor/file_system/editor_file_system.h"
@@ -447,9 +450,23 @@ Error EditorExportPlatform::_save_pack_file(const Ref<EditorExportPreset> &p_pre
 	sd.ofs = (pd->use_sparse_pck) ? 0 : pd->f->get_position();
 	sd.size = p_data.size();
 	sd.delta = p_delta;
-	Error err = _encrypt_and_store_data(ftmp, simplified_path, p_data, p_enc_in_filters, p_enc_ex_filters, p_key, p_seed, sd.encrypted);
-	if (err != OK) {
-		return err;
+
+	// Vault assets are exported at uniform "res://.vault/<uid-text>.enc"
+	// paths carrying already-encrypted GVAU containers (AES-128-GCM):
+	// never script-encrypt them (that would double-encrypt and break the
+	// AssetVault key derivation contract), and let the md5 below hash the
+	// ciphertext (p_data IS the container) instead of the plaintext
+	// (a known-plaintext oracle).
+	sd.vault = simplified_path.begins_with("res://.vault/") && simplified_path.ends_with(".enc");
+
+	Error err = OK;
+	if (sd.vault) {
+		ftmp->store_buffer(p_data.ptr(), p_data.size());
+	} else {
+		err = _encrypt_and_store_data(ftmp, simplified_path, p_data, p_enc_in_filters, p_enc_ex_filters, p_key, p_seed, sd.encrypted);
+		if (err != OK) {
+			return err;
+		}
 	}
 	if (!pd->use_sparse_pck) {
 		ERR_FAIL_COND_V(pd->f->get_position() - sd.ofs < (uint64_t)p_data.size(), ERR_FILE_CANT_WRITE);
@@ -483,7 +500,9 @@ Error EditorExportPlatform::_save_pack_file(const Ref<EditorExportPreset> &p_pre
 }
 
 Error EditorExportPlatform::_save_pack_patch_file(const Ref<EditorExportPreset> &p_preset, void *p_userdata, const String &p_path, const Vector<uint8_t> &p_data, int p_file, int p_total, const Vector<String> &p_enc_in_filters, const Vector<String> &p_enc_ex_filters, const Vector<uint8_t> &p_key, uint64_t p_seed, bool p_delta) {
-	Ref<FileAccess> old_file = PackedData::get_singleton()->try_open_path(p_path, _get_script_encryption_key_bytes(p_preset));
+	ERR_FAIL_COND_V_MSG(simplify_path(p_path).begins_with("res://.vault/"), ERR_UNAVAILABLE,
+			"Asset Vault entries cannot be delta-patched (use a full export for vault assets): " + p_path);
+	Ref<FileAccess> old_file = PackedData::get_singleton()->try_open_path(p_path, nullptr, _get_script_encryption_key_bytes(p_preset));
 	if (old_file.is_null()) {
 		return _save_pack_file(p_preset, p_userdata, p_path, p_data, p_file, p_total, p_enc_in_filters, p_enc_ex_filters, p_key, p_seed, false);
 	}
@@ -544,6 +563,8 @@ Error EditorExportPlatform::_save_pack_patch_file(const Ref<EditorExportPreset> 
 
 Error EditorExportPlatform::_save_zip_file(const Ref<EditorExportPreset> &p_preset, void *p_userdata, const String &p_path, const Vector<uint8_t> &p_data, int p_file, int p_total, const Vector<String> &p_enc_in_filters, const Vector<String> &p_enc_ex_filters, const Vector<uint8_t> &p_key, uint64_t p_seed, bool p_delta) {
 	ERR_FAIL_COND_V_MSG(p_total < 1, ERR_PARAMETER_RANGE_ERROR, "Must select at least one file to export.");
+	ERR_FAIL_COND_V_MSG(simplify_path(p_path).begins_with("res://.vault/"), ERR_UNAVAILABLE,
+			"Asset Vault entries are not supported in ZIP exports (use a PCK export): " + p_path);
 
 	const String path = simplify_path(p_path).replace_first("res://", "");
 
@@ -1177,6 +1198,16 @@ Vector<uint8_t> EditorExportPlatform::_get_script_encryption_key_bytes(const Ref
 	return key;
 }
 
+Vector<uint8_t> EditorExportPlatform::_get_vault_masterkey_bytes(const Ref<EditorExportPreset> &p_preset) {
+	// Environment override (CI) first, then the preset property (stored in
+	// .godot/export_credentials.cfg). Hex-decoded; empty if unset/invalid.
+	Vector<uint8_t> key = AssetVault::masterkey_from_env();
+	if (key.is_empty()) {
+		key = AssetVault::hex_to_bytes(p_preset->get_vault_masterkey());
+	}
+	return key;
+}
+
 Dictionary EditorExportPlatform::get_internal_export_files(const Ref<EditorExportPreset> &p_preset, bool p_debug) {
 	Dictionary files;
 
@@ -1317,6 +1348,14 @@ Error EditorExportPlatform::_export_project_files(const Ref<EditorExportPreset> 
 }
 
 Error EditorExportPlatform::export_project_files(const Ref<EditorExportPreset> &p_preset, bool p_debug, EditorExportSaveFunction p_save_func, EditorExportRemoveFunction p_remove_func, void *p_udata, EditorExportSaveSharedObject p_so_func) {
+	// Resets the vault path remaps set below on every exit path (the function
+	// has many early returns; stale remaps must never leak into later saves).
+	struct PathRemapsResetGuard {
+		~PathRemapsResetGuard() {
+			ResourceSaver::set_path_remaps(HashMap<String, String>());
+		}
+	} path_remaps_reset_guard;
+
 	//figure out paths of files that will be exported
 	HashSet<String> paths;
 	Vector<String> path_remaps;
@@ -1372,6 +1411,85 @@ Error EditorExportPlatform::export_project_files(const Ref<EditorExportPreset> &
 
 	// Ignore import files, since these are automatically added to the jar later with the resources
 	_edit_filter_list(paths, String("*.import"), true);
+
+	// Asset Vault: assets flagged via ".vault" sidecar files are encrypted
+	// (GVAU / AES-128-GCM; per-asset key = HKDF(master, uid:tag)) and exported
+	// at uniform "res://.vault/<uid-text>.enc" paths — original paths, file
+	// extensions and types are stripped; the type only becomes visible after
+	// decryption with a key granted to AssetVault.
+	HashMap<String, String> vault_map; // original path -> vault export path.
+	HashMap<String, uint32_t> vault_tags; // original path -> key tag.
+	Vector<uint8_t> vault_masterkey;
+	{
+		Vector<String> no_uid;
+		for (const String &path : paths) {
+			if (path.ends_with(".vault") || path.ends_with(".import") || path.ends_with(".remap") || path.ends_with(".uid")) {
+				continue;
+			}
+			if (!EditorVault::is_encrypted(path)) {
+				continue;
+			}
+			ResourceUID::ID uid = EditorVault::get_asset_uid(path);
+			if (uid == ResourceUID::INVALID_ID) {
+				no_uid.push_back(path);
+				continue;
+			}
+			vault_map.insert(path, AssetVault::get_vault_path(uid));
+			vault_tags.insert(path, EditorVault::get_key_tag(path));
+		}
+		if (!no_uid.is_empty()) {
+			add_message(EXPORT_MESSAGE_ERROR, "vault",
+					vformat(TTR("Assets marked for vault encryption have no UID (re-save/re-import them or remove their .vault sidecar):\n%s."), String("\n").join(no_uid)));
+			return ERR_INVALID_PARAMETER;
+		}
+		// Vault export paths are derived from the uid alone, so two assets
+		// sharing a uid (invalid, but possible, e.g. a "keep"-imported copy
+		// carrying the source's uid) would silently emit both to the same vault
+		// path — the second directory entry overwrites the first.
+		{
+			HashMap<String, String> vault_path_owner; // vault export path -> original path.
+			for (const KeyValue<String, String> &E : vault_map) {
+				const String *owner = vault_path_owner.getptr(E.value);
+				if (owner) {
+					add_message(EXPORT_MESSAGE_ERROR, "vault",
+							vformat(TTR("Asset Vault: \"%s\" and \"%s\" resolve to the same UID (and thus the same vault export path '%s'). Vault assets must have distinct UIDs, or they would silently overwrite each other in the pack."), *owner, E.key, E.value));
+					return ERR_UNAVAILABLE;
+				}
+				vault_path_owner.insert(E.value, E.key);
+			}
+		}
+		// Assets the exporter force-includes by their original path (the project
+		// icon and boot splash; the runtime loads them by path, before any keys
+		// are available) cannot be vault-encrypted.
+		{
+			Vector<String> forced_vault;
+			for (const String &forced : get_forced_export_files(p_preset)) {
+				if (vault_map.has(forced)) {
+					forced_vault.push_back(forced);
+				}
+			}
+			if (!forced_vault.is_empty()) {
+				add_message(EXPORT_MESSAGE_ERROR, "vault",
+						vformat(TTR("Assets force-included by the export by their original path (project icon, boot splash) cannot be vault-encrypted, because the runtime loads them by path before any keys are available:\n%s"), String("\n").join(forced_vault)));
+				return ERR_INVALID_PARAMETER;
+			}
+		}
+		if (!vault_map.is_empty()) {
+			vault_masterkey = _get_vault_masterkey_bytes(p_preset);
+			if (vault_masterkey.size() < 32) {
+				add_message(EXPORT_MESSAGE_ERROR, "vault",
+						vformat(TTR("%d assets are marked for vault encryption but no valid master key is set. Set the Asset Vault master key (hex, at least 32 bytes) in the export preset or the GODOT_VAULT_MASTERKEY environment variable."), vault_map.size()));
+				return ERR_UNAUTHORIZED;
+			}
+			// Vault assets' original paths must not leak into exported dependent
+			// resources: while saving, remap them to the uniform vault paths (the
+			// uid saved alongside keeps loading working). Reset after the export.
+			ResourceSaver::set_path_remaps(vault_map);
+			print_line(vformat("Asset Vault: %d asset(s) will be vault-encrypted.", vault_map.size()));
+		}
+		// Sidecars are metadata; never exported.
+		_edit_filter_list(paths, String("*.vault"), true);
+	}
 
 	// Get encryption filters.
 	bool enc_pck = p_preset->get_enc_pck();
@@ -1477,6 +1595,21 @@ Error EditorExportPlatform::export_project_files(const Ref<EditorExportPreset> &
 		return err;
 	}
 
+	// Vault path remaps change the saved output (vault assets are referenced by
+	// their uniform vault paths), so fold the vault set into the customization
+	// hash: export caches saved with a different vault set must not be reused.
+	{
+		Vector<String> vault_keys; // Sorted: the hash must be deterministic.
+		for (const KeyValue<String, String> &E : vault_map) {
+			vault_keys.push_back(E.key);
+		}
+		vault_keys.sort();
+		for (const String &vault_key : vault_keys) {
+			custom_resources_hash = hash_murmur3_one_64(vault_key.hash64(), custom_resources_hash);
+			custom_resources_hash = hash_murmur3_one_64(vault_map[vault_key].hash64(), custom_resources_hash);
+		}
+	}
+
 	HashMap<String, FileExportCache> export_cache;
 	String export_base_path = ProjectSettings::get_singleton()->get_project_data_path().path_join("exported/") + itos(custom_resources_hash);
 
@@ -1517,6 +1650,28 @@ Error EditorExportPlatform::export_project_files(const Ref<EditorExportPreset> &
 	// idx is incremented at the beginning of the paths loop to easily allow
 	// for continue statements without accidentally skipping an increment.
 	int idx = total > 0 ? -1 : 0;
+
+	// Asset Vault: encrypts p_plain for p_uid at key tag p_key_tag and saves
+	// the GVAU container at the uniform vault path. p_flags carries
+	// VaultContainer flags. Payloads must be loadable through the uniform
+	// ".enc" path at runtime (dispatch by payload magic, since the path hides
+	// the type): (compressed) generic binary resources ("RSRC"/"RSCC") or
+	// compressed textures ("GST2"/"GSTL"); see VaultContainer::is_*_payload.
+	auto save_vault_file = [&](const String &p_path, ResourceUID::ID p_uid, uint32_t p_key_tag, uint16_t p_flags, const Vector<uint8_t> &p_plain) -> Error {
+		ERR_FAIL_COND_V_MSG(p_plain.size() < 4 || (!VaultContainer::is_binary_resource_payload(p_plain.ptr()) && !VaultContainer::is_compressed_texture_payload(p_plain.ptr())), ERR_FILE_CORRUPT,
+				vformat(TTR("Asset Vault: payload of \"%s\" is not a supported format for vault encryption (binary resource (RSRC/RSCC) or compressed texture (GST2/GSTL) expected)."), p_path));
+
+		Vector<uint8_t> vault_key = AssetVault::derive_key(vault_masterkey, ResourceUID::get_singleton()->id_to_text(p_uid), p_key_tag);
+		ERR_FAIL_COND_V_MSG(vault_key.is_empty(), ERR_CANT_CREATE,
+				vformat(TTR("Asset Vault: key derivation failed for \"%s\"."), p_path));
+
+		Vector<uint8_t> container;
+		Error verr = VaultContainer::encrypt(container, p_plain, p_uid, p_key_tag, p_flags, vault_key.ptr());
+		ERR_FAIL_COND_V_MSG(verr != OK, verr,
+				vformat(TTR("Asset Vault: encryption failed for \"%s\"."), p_path));
+
+		return save_proxy.save_file(p_preset, p_udata, AssetVault::get_vault_path(p_uid), container, idx, total, enc_in_filters, enc_ex_filters, key, seed, false);
+	};
 
 	for (const String &path : paths) {
 		idx++;
@@ -1577,12 +1732,80 @@ Error EditorExportPlatform::export_project_files(const Ref<EditorExportPreset> &
 				break;
 			}
 		}
+		if (!do_export && vault_map.has(path)) {
+			// An export plugin converted or skipped the file, so the vault entry
+			// would never be emitted, while the uid_cache would still resolve the
+			// asset's uid to a dangling vault path (and the plugin's converted
+			// form, e.g. ".gdc" scripts and their ".remap" files, would leak the
+			// original path). Script export modes convert ".gd" files like this.
+			add_message(EXPORT_MESSAGE_ERROR, "vault",
+					vformat(TTR("Asset Vault: \"%s\" cannot be vault-encrypted because an export plugin converts or skips it (e.g. script export modes convert \".gd\" files). Remove the .vault sidecar, or use a file type that is exported as-is."), path));
+			return ERR_UNAVAILABLE;
+		}
 		if (!do_export) {
 			continue;
 		}
 
 		if (has_import_file) {
 			String importer_type = config->get_value("remap", "importer");
+
+			if (vault_map.has(path)) {
+				if (importer_type == "keep") {
+					add_message(EXPORT_MESSAGE_ERROR, "vault",
+						vformat(TTR("Asset Vault: imported asset \"%s\" uses importer type \"keep\" (raw source export), which is not supported for vault encryption."), path));
+					return ERR_UNAVAILABLE;
+				}
+				// Prefer a plugin-customized artifact; otherwise the import
+				// artifact remapped for this export's features.
+				String artifact_path;
+				Vector<String> variant_paths;
+				String export_path = _export_customize(path, customize_resources_plugins, customize_scenes_plugins, export_cache, export_base_path, false);
+				if (export_path != path) {
+					// It was actually customized.
+					artifact_path = export_path;
+				} else {
+					Vector<String> remaps = config->get_section_keys("remap");
+					HashSet<String> remap_features;
+
+					for (const String &F : remaps) {
+						String feature = F.get_slicec('.', 1);
+						if (features.has(feature)) {
+							remap_features.insert(feature);
+						}
+					}
+					if (remap_features.size() > 1) {
+						resolve_platform_feature_priorities(p_preset, remap_features);
+					}
+
+					for (const String &F : remaps) {
+						if (F == "path") {
+							variant_paths.push_back(config->get_value("remap", F));
+						} else if (F.begins_with("path.")) {
+							if (remap_features.has(F.get_slicec('.', 1))) {
+								variant_paths.push_back(config->get_value("remap", F));
+							}
+						}
+					}
+					artifact_path = variant_paths.size() > 0 ? variant_paths[0] : String();
+				}
+				if (artifact_path.is_empty() || !FileAccess::exists(artifact_path)) {
+					add_message(EXPORT_MESSAGE_ERROR, "vault",
+						vformat(TTR("Asset Vault: no import artifact to encrypt for \"%s\"."), path));
+					return ERR_FILE_NOT_FOUND;
+				}
+				if (variant_paths.size() > 1) {
+					add_message(EXPORT_MESSAGE_WARNING, "vault",
+						vformat(TTR("Asset Vault: imported asset \"%s\" has multiple import variants; exported the first one (\"%s\"). Multi-variant vault imports are not supported."), path, variant_paths[0]));
+				}
+
+				Vector<uint8_t> data = FileAccess::get_file_as_bytes(artifact_path);
+				err = save_vault_file(path, EditorVault::get_asset_uid(path), vault_tags[path], VaultContainer::FLAG_IMPORTED_ARTIFACT, data);
+				if (err != OK) {
+					return err;
+				}
+				// Do not emit the source file, ".import" file or artifact path.
+				continue;
+			}
 
 			if (importer_type == "keep") {
 				// Just keep file as-is.
@@ -1704,6 +1927,21 @@ Error EditorExportPlatform::export_project_files(const Ref<EditorExportPreset> &
 			}
 
 		} else {
+			if (vault_map.has(path)) {
+				// Vault assets are always converted to binary (mandatory: every
+				// vault payload must be a binary resource) and encrypted at the
+				// uniform vault path. No ".remap" entry and no plaintext emission;
+				// the exported uid_cache resolves the uid to the vault path.
+				bool force_binary = true;
+				String export_path = _export_customize(path, customize_resources_plugins, customize_scenes_plugins, export_cache, export_base_path, force_binary);
+				Vector<uint8_t> data = FileAccess::get_file_as_bytes(export_path);
+				err = save_vault_file(path, EditorVault::get_asset_uid(path), vault_tags[path], 0, data);
+				if (err != OK) {
+					return err;
+				}
+				continue;
+			}
+
 			// Just store it as it comes.
 
 			String export_path;
@@ -1798,7 +2036,7 @@ Error EditorExportPlatform::export_project_files(const Ref<EditorExportPreset> &
 		}
 	}
 
-	const FilteredCache filtered_cache = _get_filtered_cache(paths);
+	const FilteredCache filtered_cache = _get_filtered_cache(paths, vault_map);
 
 	Vector<String> forced_export = get_forced_export_files(p_preset);
 	for (const String &file : forced_export) {
@@ -1866,7 +2104,10 @@ Error EditorExportPlatform::export_project_files(const Ref<EditorExportPreset> &
 
 // Used by the main export function to filter excluded global classes, extensions
 // and UIDs based on excluded resources configured in the export preset.
-EditorExportPlatform::FilteredCache EditorExportPlatform::_get_filtered_cache(const HashSet<String> &p_paths) {
+// p_vault_map maps vault-encrypted assets to their uniform in-pack
+// "res://.vault/<uid-text>.enc" paths, so the exported uid_cache resolves
+// their uids to the vault paths (and never carries their original paths).
+EditorExportPlatform::FilteredCache EditorExportPlatform::_get_filtered_cache(const HashSet<String> &p_paths, const HashMap<String, String> &p_vault_map) {
 	FilteredCache result;
 
 	HashSet<String> extension_list_lines;
@@ -1907,7 +2148,12 @@ EditorExportPlatform::FilteredCache EditorExportPlatform::_get_filtered_cache(co
 		}
 		ResourceUID::ID uid = EditorFileSystem::get_singleton()->get_file_uid(path);
 		if (uid != ResourceUID::INVALID_ID) {
-			uid_entries.push_back(Pair<ResourceUID::ID, String>(uid, path));
+			String uid_path = path;
+			const String *vault_path = p_vault_map.getptr(path);
+			if (vault_path) {
+				uid_path = *vault_path;
+			}
+			uid_entries.push_back(Pair<ResourceUID::ID, String>(uid, uid_path));
 		}
 	}
 
@@ -2275,6 +2521,9 @@ bool EditorExportPlatform::_encrypt_and_store_directory(Ref<FileAccess> p_fd, Pa
 		}
 		if (p_pack_data.file_ofs[i].delta) {
 			flags |= PACK_FILE_DELTA;
+		}
+		if (p_pack_data.file_ofs[i].vault) {
+			flags |= PACK_FILE_VAULT;
 		}
 		fhead->store_32(flags);
 	}

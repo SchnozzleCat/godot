@@ -33,6 +33,7 @@
 #include "core/config/project_settings.h"
 #include "core/io/dir_access.h"
 #include "core/io/missing_resource.h"
+#include "core/io/resource_saver.h"
 #include "core/object/class_db.h"
 #include "core/object/script_language.h"
 #include "scene/property_utils.h"
@@ -1877,11 +1878,14 @@ Error ResourceFormatSaverTextInstance::save(const String &p_path, const Ref<Reso
 	sorted_er.sort();
 
 	for (int i = 0; i < sorted_er.size(); i++) {
-		String p = sorted_er[i].resource->get_path();
+		// Vault assets are saved with their uniform in-pack path so their
+		// original paths don't leak into exported dependent resources.
+		String original_path = sorted_er[i].resource->get_path();
+		String p = ResourceSaver::get_remapped_path(original_path);
 
 		String s = "[ext_resource type=\"" + sorted_er[i].resource->get_save_class() + "\"";
 
-		ResourceUID::ID uid = ResourceSaver::get_resource_id_for_path(p, false);
+		ResourceUID::ID uid = ResourceSaver::get_resource_id_for_path(original_path, false);
 		if (uid != ResourceUID::INVALID_ID) {
 			s += " uid=\"" + ResourceUID::get_singleton()->id_to_text(uid) + "\"";
 		}

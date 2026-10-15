@@ -34,6 +34,7 @@
 #include "core/io/dir_access.h"
 #include "core/io/file_access_compressed.h"
 #include "core/io/missing_resource.h"
+#include "core/io/resource_saver.h"
 #include "core/object/class_db.h"
 #include "core/object/script_language.h"
 #include "core/version.h"
@@ -2259,7 +2260,12 @@ Error ResourceFormatSaverBinaryInstance::save(const String &p_path, const Ref<Re
 	for (int i = 0; i < save_order.size(); i++) {
 		save_unicode_string(f, save_order[i]->get_save_class());
 		String res_path = save_order[i]->get_path();
-		res_path = relative_paths ? local_path.path_to_file(res_path) : res_path;
+		String remapped_path = ResourceSaver::get_remapped_path(res_path); // Vault assets: uniform in-pack path.
+		if (remapped_path != res_path) {
+			res_path = remapped_path; // Never relativized: uniform vault paths are absolute in-pack paths.
+		} else {
+			res_path = relative_paths ? local_path.path_to_file(res_path) : res_path;
+		}
 		save_unicode_string(f, res_path);
 		ResourceUID::ID ruid = ResourceSaver::get_resource_id_for_path(save_order[i]->get_path(), false);
 		f->store_64(uint64_t(ruid));

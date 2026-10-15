@@ -100,6 +100,11 @@ private:
 	String script_key;
 	ScriptExportMode script_mode = MODE_SCRIPT_BINARY_TOKENS_COMPRESSED;
 
+	// Asset Vault master key (hex, >= 32 bytes recommended). Stored in
+	// .godot/export_credentials.cfg; prefer GODOT_VAULT_MASTERKEY for real
+	// projects. Per-asset keys are derived at export via HKDF(master, uid:tag).
+	String vault_masterkey;
+
 protected:
 	bool _set(const StringName &p_name, const Variant &p_value);
 	bool _get(const StringName &p_name, Variant &r_ret) const;
@@ -208,6 +213,9 @@ public:
 
 	void set_script_export_mode(ScriptExportMode p_mode);
 	ScriptExportMode get_script_export_mode() const;
+
+	void set_vault_masterkey(const String &p_key);
+	String get_vault_masterkey() const;
 
 	Variant _get_or_env(const StringName &p_name, const String &p_env_var) const {
 		return get_or_env(p_name, p_env_var);

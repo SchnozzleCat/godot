@@ -91,9 +91,12 @@
 #ifndef DISABLE_DEPRECATED
 #include "core/io/packed_data_container.h"
 #endif
+#include "core/io/asset_vault.h"
+#include "core/io/resource_format_vault.h"
 
 static Ref<ResourceFormatSaverBinary> resource_saver_binary;
 static Ref<ResourceFormatLoaderBinary> resource_loader_binary;
+static Ref<ResourceFormatVaultLoader> resource_loader_vault;
 static Ref<ResourceFormatImporter> resource_format_importer;
 static Ref<ResourceFormatImporterSaver> resource_format_importer_saver;
 static Ref<ResourceFormatLoaderImage> resource_format_image;
@@ -128,6 +131,7 @@ extern void register_global_constants();
 extern void unregister_global_constants();
 
 static ResourceUID *resource_uid = nullptr;
+static AssetVault *asset_vault = nullptr;
 
 static bool _is_core_extensions_registered = false;
 
@@ -165,6 +169,9 @@ void register_core_types() {
 	ResourceSaver::add_resource_format_saver(resource_saver_binary);
 	resource_loader_binary.instantiate();
 	ResourceLoader::add_resource_format_loader(resource_loader_binary);
+
+	resource_loader_vault.instantiate();
+	ResourceLoader::add_resource_format_loader(resource_loader_vault);
 
 	resource_format_importer.instantiate();
 	ResourceLoader::add_resource_format_loader(resource_format_importer);
@@ -299,10 +306,12 @@ void register_core_types() {
 	GDREGISTER_ABSTRACT_CLASS(GDExtensionManager);
 
 	GDREGISTER_ABSTRACT_CLASS(ResourceUID);
+	GDREGISTER_ABSTRACT_CLASS(AssetVault);
 
 	GDREGISTER_CLASS(EngineProfiler);
 
 	resource_uid = memnew(ResourceUID);
+	asset_vault = memnew(AssetVault);
 
 	gdextension_manager = memnew(GDExtensionManager);
 
@@ -384,6 +393,7 @@ void register_core_singletons() {
 	Engine::get_singleton()->add_singleton(Engine::Singleton("EngineDebugger", CoreBind::EngineDebugger::get_singleton()));
 	Engine::get_singleton()->add_singleton(Engine::Singleton("GDExtensionManager", GDExtensionManager::get_singleton()));
 	Engine::get_singleton()->add_singleton(Engine::Singleton("ResourceUID", ResourceUID::get_singleton()));
+	Engine::get_singleton()->add_singleton(Engine::Singleton("AssetVault", AssetVault::get_singleton()));
 	Engine::get_singleton()->add_singleton(Engine::Singleton("WorkerThreadPool", worker_thread_pool));
 
 	OS::get_singleton()->benchmark_end_measure("Core", "Register Singletons");
@@ -434,6 +444,8 @@ void unregister_core_types() {
 
 	memdelete(resource_uid);
 
+	memdelete(asset_vault);
+
 	if (ip) {
 		memdelete(ip);
 	}
@@ -448,6 +460,9 @@ void unregister_core_types() {
 
 	ResourceLoader::remove_resource_format_loader(resource_loader_binary);
 	resource_loader_binary.unref();
+
+	ResourceLoader::remove_resource_format_loader(resource_loader_vault);
+	resource_loader_vault.unref();
 
 	ResourceLoader::remove_resource_format_loader(resource_format_importer);
 	resource_format_importer.unref();

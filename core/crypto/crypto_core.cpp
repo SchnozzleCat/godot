@@ -37,6 +37,8 @@
 #include <mbedtls/base64.h>
 #include <mbedtls/ctr_drbg.h>
 #include <mbedtls/entropy.h>
+#include <mbedtls/gcm.h>
+#include <mbedtls/hkdf.h>
 #include <mbedtls/md5.h>
 #include <mbedtls/sha1.h>
 #include <mbedtls/sha256.h>
@@ -248,5 +250,63 @@ Error CryptoCore::sha1(const uint8_t *p_src, size_t p_src_len, unsigned char r_h
 
 Error CryptoCore::sha256(const uint8_t *p_src, size_t p_src_len, unsigned char r_hash[32]) {
 	int ret = mbedtls_sha256_ret(p_src, p_src_len, r_hash, 0);
+	return ret ? FAILED : OK;
+}
+
+Error CryptoCore::hkdf_sha256(const uint8_t *p_secret, size_t p_secret_len,
+		const uint8_t *p_salt, size_t p_salt_len,
+		const uint8_t *p_info, size_t p_info_len,
+		uint8_t *r_dst, size_t p_dst_len) {
+	const mbedtls_md_info_t *md = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+	ERR_FAIL_NULL_V(md, ERR_UNAVAILABLE);
+	int ret = mbedtls_hkdf(md,
+			p_salt, p_salt_len,
+			p_secret, p_secret_len,
+			p_info, p_info_len,
+			r_dst, p_dst_len);
+	return ret ? FAILED : OK;
+}
+
+Error CryptoCore::aes_gcm_encrypt(const uint8_t *p_key, size_t p_key_len,
+		const uint8_t *p_nonce, size_t p_nonce_len,
+		const uint8_t *p_aad, size_t p_aad_len,
+		const uint8_t *p_src, size_t p_src_len,
+		uint8_t *r_dst, uint8_t r_tag[16]) {
+	mbedtls_gcm_context gcm;
+	mbedtls_gcm_init(&gcm);
+	int ret = mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, p_key, p_key_len * 8);
+	if (ret == 0) {
+		ret = mbedtls_gcm_crypt_and_tag(&gcm, MBEDTLS_GCM_ENCRYPT,
+				p_src_len,
+				p_nonce, p_nonce_len,
+				p_aad, p_aad_len,
+				p_src, r_dst,
+				16, r_tag);
+	}
+	mbedtls_gcm_free(&gcm);
+	return ret ? FAILED : OK;
+}
+
+Error CryptoCore::aes_gcm_decrypt(const uint8_t *p_key, size_t p_key_len,
+		const uint8_t *p_nonce, size_t p_nonce_len,
+		const uint8_t *p_aad, size_t p_aad_len,
+		const uint8_t *p_tag, size_t p_tag_len,
+		const uint8_t *p_src, size_t p_src_len,
+		uint8_t *r_dst) {
+	mbedtls_gcm_context gcm;
+	mbedtls_gcm_init(&gcm);
+	int ret = mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, p_key, p_key_len * 8);
+	if (ret == 0) {
+		ret = mbedtls_gcm_auth_decrypt(&gcm,
+				p_src_len,
+				p_nonce, p_nonce_len,
+				p_aad, p_aad_len,
+				p_tag, p_tag_len,
+				p_src, r_dst);
+	}
+	mbedtls_gcm_free(&gcm);
+	if (ret == MBEDTLS_ERR_GCM_AUTH_FAILED) {
+		return ERR_FILE_CORRUPT;
+	}
 	return ret ? FAILED : OK;
 }

@@ -32,6 +32,7 @@
 
 #include "core/io/resource.h"
 #include "core/object/gdvirtual.gen.h"
+#include "core/templates/hash_map.h"
 
 class ResourceFormatSaver : public RefCounted {
 	GDCLASS(ResourceFormatSaver, RefCounted);
@@ -68,6 +69,7 @@ class ResourceSaver {
 	static bool timestamp_on_save;
 	static ResourceSavedCallback save_callback;
 	static ResourceSaverGetResourceIDForPath save_get_id_for_path;
+	static HashMap<String, String> path_remaps;
 
 	static Ref<ResourceFormatSaver> _find_custom_resource_format_saver(const String &path);
 
@@ -92,6 +94,16 @@ public:
 
 	static void set_timestamp_on_save(bool p_timestamp) { timestamp_on_save = p_timestamp; }
 	static bool get_timestamp_on_save() { return timestamp_on_save; }
+
+	// Maps resource paths to alternate paths used when saving external resource
+	// references. The exporter uses this to replace the original paths of
+	// vault-encrypted assets with their uniform in-pack "res://.vault/<uid>.enc"
+	// paths so the originals don't leak into exported dependent resources (the
+	// uid saved alongside keeps loading working). Call with an empty map to reset.
+	static void set_path_remaps(const HashMap<String, String> &p_remaps);
+	// Returns p_path, or its remapped alias (see set_path_remaps); used by the
+	// resource format savers when writing external resource paths.
+	static String get_remapped_path(const String &p_path);
 
 	static ResourceUID::ID get_resource_id_for_path(const String &p_path, bool p_generate = false);
 

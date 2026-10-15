@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="AssetVault" inherits="Object" api_type="core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../class.xsd">
+	<brief_description>
+		A singleton that holds the granted per-asset decryption keys for vault-encrypted assets.
+	</brief_description>
+	<description>
+		The Asset Vault encrypts exported assets per asset (AES-128-GCM) so that their contents, file types and original paths are hidden in the exported game. Assets are loaded at runtime exclusively through their [code]uid://[/code] paths; a vault-encrypted asset can only be loaded after the key-granting server has granted its per-asset key to this singleton.
+		The client never receives the master key. Keys are derived deterministically from the master key, so the same key can be derived independently by the server and the export machine:
+		[codeblock]
+		key = HKDF-SHA256(
+            IKM = master,                      # 32+ bytes, hex-encoded for humans
+            salt = "godot-asset-vault-v1",
+            info = "uid://&lt;uid-text&gt;:&lt;tag&gt;",   # tag = key rotation counter
+            L = 16)                           # AES-128
+		[/codeblock]
+		[b]Warning:[/b] [method AssetVault.derive_key] and [method AssetVault.masterkey_from_env] are intended for export machines and key-granting servers. Never ship a client build with the master key present in its environment or export presets — that defeats the vault entirely.
+		To load a vault-encrypted asset, grant its key first:
+		[codeblock]
+		AssetVault.grant_key("uid://b3l4r8xqnld0n", key) # key received from the server
+		var texture = load("uid://b3l4r8xqnld0n")
+		[/codeblock]
+		Without a granted key the load fails with an [code]@GlobalScope.ERR_UNAUTHORIZED[/code] error naming the missing uid. With a wrong or stale key (for example, granted before the asset's key was rotated), the load fails with a corruption error that includes the container's key tag.
+		Once a resource is loaded it stays in the resource cache; revoking the key does not evict already-loaded resources, it only affects future loads.
+	</description>
+	<tutorials>
+	</tutorials>
+	<methods>
+		<method name="clear">
+			<return type="void" />
+			<description>
+				Forgets all granted keys (best-effort zeroization of key buffers). Affects future loads only; already-loaded resources stay in the resource cache.
+			</description>
+		</method>
+		<method name="grant_key">
+			<return type="int" enum="Error" />
+			<param index="0" name="uid" type="String" />
+			<param index="1" name="key" type="PackedByteArray" />
+			<description>
+				Grants the per-asset AES-128 key (exactly 16 bytes) for the given uid (in [code]uid://[/code] text form or as a numeric uid string). Idempotent. After a key is granted, the asset can be loaded through its [code]uid://[/code] path until the key is revoked or [method clear] is called.
+			</description>
+		</method>
+		<method name="has_key" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="uid" type="String" />
+			<description>
+				Returns [code]true[/code] if a key is currently granted for the given uid.
+			</description>
+		</method>
+		<method name="revoke_key">
+			<return type="int" enum="Error" />
+			<param index="0" name="uid" type="String" />
+			<description>
+				Forgets the granted key for the given uid. Future loads of the asset fail with [code]@GlobalScope.ERR_UNAUTHORIZED[/code] until a new key is granted. Affects future loads only.
+			</description>
+		</method>
+		<method name="derive_key" qualifiers="static">
+			<return type="PackedByteArray" />
+			<param index="0" name="master" type="PackedByteArray" />
+			<param index="1" name="uid" type="String" />
+			<param index="2" name="tag" type="int" default="1" />
+			<description>
+				Derives the per-asset AES-128 key (16 bytes) for the given uid and key rotation tag via HKDF-SHA256. Intended for the export machine and the key-granting server: given the same master key, uid and tag, the same key is derived everywhere. [b]Warning:[/b] keep the master key off client machines.
+			</description>
+		</method>
+		<method name="masterkey_from_env" qualifiers="static">
+			<return type="PackedByteArray" />
+			<description>
+				Reads and hex-decodes the [code]GODOT_VAULT_MASTERKEY[/code] environment variable. Returns an empty array if it is unset or invalid. Intended for the export machine and the key-granting server.
+			</description>
+		</method>
+		<method name="get_vault_path" qualifiers="static">
+			<return type="String" />
+			<param index="0" name="uid" type="int" />
+			<description>
+				Returns the uniform in-pack path a vault-encrypted asset is exported to: [code]res://.vault/&lt;uid-text&gt;.enc[/code].
+			</description>
+		</method>
+		<method name="hex_to_bytes" qualifiers="static">
+			<return type="PackedByteArray" />
+			<param index="0" name="hex" type="String" />
+			<description>
+				Decodes a hexadecimal string (optional [code]0x[/code] prefix, even length) into bytes. Returns an empty array for invalid input.
+			</description>
+		</method>
+	</methods>
+</class>

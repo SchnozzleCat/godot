@@ -116,6 +116,7 @@ void EditorExportPreset::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_encrypt_pck"), &EditorExportPreset::get_enc_pck);
 	ClassDB::bind_method(D_METHOD("get_encrypt_directory"), &EditorExportPreset::get_enc_directory);
 	ClassDB::bind_method(D_METHOD("get_encryption_key"), &EditorExportPreset::get_script_encryption_key);
+	ClassDB::bind_method(D_METHOD("get_vault_masterkey"), &EditorExportPreset::get_vault_masterkey);
 	ClassDB::bind_method(D_METHOD("get_script_export_mode"), &EditorExportPreset::get_script_export_mode);
 
 	ClassDB::bind_method(D_METHOD("get_or_env", "name", "env_var"), &EditorExportPreset::_get_or_env);
@@ -560,6 +561,15 @@ void EditorExportPreset::set_script_encryption_key(const String &p_key) {
 
 String EditorExportPreset::get_script_encryption_key() const {
 	return script_key;
+}
+
+void EditorExportPreset::set_vault_masterkey(const String &p_key) {
+	vault_masterkey = p_key;
+	EditorExport::singleton->save_presets();
+}
+
+String EditorExportPreset::get_vault_masterkey() const {
+	return vault_masterkey;
 }
 
 void EditorExportPreset::set_script_export_mode(ScriptExportMode p_mode) {

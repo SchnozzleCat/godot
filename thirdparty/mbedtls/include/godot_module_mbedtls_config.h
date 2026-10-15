@@ -43,6 +43,10 @@
 // Include default mbedTLS config.
 #include <mbedtls/mbedtls_config.h>
 
+// Enable the HKDF algorithm (RFC 5869) for CryptoCore::hkdf_sha256
+// (asset vault per-asset key derivation). Off in the default mbedtls config.
+#define MBEDTLS_HKDF_C
+
 // Disable weak cryptography.
 #undef MBEDTLS_KEY_EXCHANGE_DHE_PSK_ENABLED
 #undef MBEDTLS_KEY_EXCHANGE_DHE_RSA_ENABLED

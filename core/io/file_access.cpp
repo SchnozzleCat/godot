@@ -162,12 +162,23 @@ Ref<FileAccess> FileAccess::open(const String &p_path, int p_mode_flags, Error *
 
 	Ref<FileAccess> ret;
 	if (!(p_mode_flags & WRITE) && !(p_mode_flags & SKIP_PACK) && PackedData::get_singleton() && !PackedData::get_singleton()->is_disabled()) {
-		ret = PackedData::get_singleton()->try_open_path(p_path);
-		if (ret.is_valid()) {
-			if (r_error) {
-				*r_error = OK;
+		if (PackedData::get_singleton()->has_path(p_path)) {
+			// The pack has the path: surface the pack source's error when the
+			// open fails instead of silently falling back to disk, which would
+			// mask the actual cause (e.g. vault: no key granted, wrong key or
+			// invalid container) behind a misleading disk error.
+			Error pack_err = OK;
+			ret = PackedData::get_singleton()->try_open_path(p_path, &pack_err);
+			if (ret.is_valid()) {
+				if (r_error) {
+					*r_error = OK;
+				}
+				return ret;
 			}
-			return ret;
+			if (pack_err != OK && r_error) {
+				*r_error = pack_err;
+				return Ref<FileAccess>();
+			}
 		}
 	}
 

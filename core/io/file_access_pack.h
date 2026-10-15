@@ -57,6 +57,7 @@ enum PackFileFlags {
 	PACK_FILE_ENCRYPTED = 1 << 0,
 	PACK_FILE_REMOVAL = 1 << 1,
 	PACK_FILE_DELTA = 1 << 2,
+	PACK_FILE_VAULT = 1 << 3,
 };
 
 class PackSource;
@@ -76,6 +77,7 @@ public:
 		bool encrypted;
 		bool bundle;
 		bool delta;
+		bool vault = false; // Asset Vault container (GVAU); per-asset key from AssetVault.
 		String salt;
 	};
 
@@ -110,6 +112,11 @@ private:
 	HashMap<PathMD5, PackedFile, PathMD5> files;
 	HashMap<PathMD5, Vector<PackedFile>, PathMD5> delta_patches;
 
+	// Last error from a failed vault open (set by FileAccessPack, consumed by
+	// try_open_path). Read/written without a lock: a concurrent open of another
+	// vault file can only overwrite an unrelated diagnostic, never correctness.
+	Error vault_error = OK;
+
 	Vector<PackSource *> sources;
 
 	PackedDir *root = nullptr;
@@ -131,7 +138,7 @@ private:
 
 public:
 	void add_pack_source(PackSource *p_source);
-	void add_path(const String &p_pkg_path, const String &p_path, uint64_t p_ofs, uint64_t p_size, const uint8_t *p_md5, PackSource *p_src, bool p_replace_files, bool p_encrypted = false, bool p_bundle = false, bool p_delta = false, const String &p_salt = String()); // for PackSource
+	void add_path(const String &p_pkg_path, const String &p_path, uint64_t p_ofs, uint64_t p_size, const uint8_t *p_md5, PackSource *p_src, bool p_replace_files, bool p_encrypted = false, bool p_bundle = false, bool p_delta = false, const String &p_salt = String(), bool p_vault = false); // for PackSource
 	void remove_path(const String &p_path);
 	uint8_t *get_file_hash(const String &p_path);
 	Vector<PackedFile> get_delta_patches(const String &p_path) const;
@@ -146,7 +153,7 @@ public:
 
 	void clear();
 
-	_FORCE_INLINE_ Ref<FileAccess> try_open_path(const String &p_path, const Vector<uint8_t> &p_decryption_key = Vector<uint8_t>());
+	_FORCE_INLINE_ Ref<FileAccess> try_open_path(const String &p_path, Error *p_r_error = nullptr, const Vector<uint8_t> &p_decryption_key = Vector<uint8_t>());
 	_FORCE_INLINE_ bool has_path(const String &p_path);
 
 	_FORCE_INLINE_ int64_t get_size(const String &p_path);
@@ -189,6 +196,14 @@ class FileAccessPack : public FileAccess {
 	uint64_t off;
 
 	Ref<FileAccess> f;
+
+	// Asset Vault: decrypted payload (kept alive while the memory-backed
+	// FileAccess serving it is alive) + failure flag for clean error reporting.
+	Vector<uint8_t> vault_data;
+	bool vault_failed = false;
+
+	Error _open_vault();
+
 	virtual Error open_internal(const String &p_path, int p_mode_flags) override;
 	virtual uint64_t _get_modified_time(const String &p_file) override { return 0; }
 	virtual uint64_t _get_access_time(const String &p_file) override { return 0; }
@@ -242,13 +257,20 @@ int64_t PackedData::get_size(const String &p_path) {
 	return E->value.size;
 }
 
-Ref<FileAccess> PackedData::try_open_path(const String &p_path, const Vector<uint8_t> &p_decryption_key) {
+Ref<FileAccess> PackedData::try_open_path(const String &p_path, Error *p_r_error, const Vector<uint8_t> &p_decryption_key) {
 	HashMap<PathMD5, PackedFile, PathMD5>::Iterator E = files.find(_get_simplified_path(p_path));
 	if (!E) {
 		return nullptr; // Not found.
 	}
 
-	return E->value.src->get_file(p_path, &E->value, p_decryption_key);
+	vault_error = OK;
+	Ref<FileAccess> ret = E->value.src->get_file(p_path, &E->value, p_decryption_key);
+	if (ret.is_null() && E->value.vault && p_r_error) {
+		// The detailed reason (no key granted, wrong key/stale tag, invalid
+		// container, ...) was already reported by FileAccessPack.
+		*p_r_error = vault_error;
+	}
+	return ret;
 }
 
 bool PackedData::has_path(const String &p_path) {

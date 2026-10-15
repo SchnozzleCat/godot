@@ -40,6 +40,14 @@
 #define MBEDTLS_CIPHER_MODE_OFB
 #define MBEDTLS_CIPHER_MODE_XTS
 
+// For the asset vault (CryptoCore::hkdf_sha256 / CryptoCore::aes_gcm_*).
+// GCM uses the generic cipher interface when MBEDTLS_BLOCK_CIPHER_C is not
+// available, so CIPHER_C is needed as well.
+#define MBEDTLS_CIPHER_C
+#define MBEDTLS_GCM_C
+#define MBEDTLS_HKDF_C
+#define MBEDTLS_MD_C
+
 #define MBEDTLS_AES_C
 #define MBEDTLS_BASE64_C
 #define MBEDTLS_CTR_DRBG_C

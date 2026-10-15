@@ -42,6 +42,7 @@ int ResourceSaver::saver_count = 0;
 bool ResourceSaver::timestamp_on_save = false;
 ResourceSavedCallback ResourceSaver::save_callback = nullptr;
 ResourceSaverGetResourceIDForPath ResourceSaver::save_get_id_for_path = nullptr;
+HashMap<String, String> ResourceSaver::path_remaps;
 
 Error ResourceFormatSaver::save(const Ref<Resource> &p_resource, const String &p_path, uint32_t p_flags) {
 	Error err = ERR_METHOD_NOT_FOUND;
@@ -53,6 +54,15 @@ Error ResourceFormatSaver::set_uid(const String &p_path, ResourceUID::ID p_uid) 
 	Error err = ERR_FILE_UNRECOGNIZED;
 	GDVIRTUAL_CALL(_set_uid, p_path, p_uid, err);
 	return err;
+}
+
+void ResourceSaver::set_path_remaps(const HashMap<String, String> &p_remaps) {
+	path_remaps = p_remaps;
+}
+
+String ResourceSaver::get_remapped_path(const String &p_path) {
+	const String *remapped = path_remaps.getptr(p_path);
+	return remapped ? *remapped : p_path;
 }
 
 bool ResourceFormatSaver::recognize(const Ref<Resource> &p_resource) const {

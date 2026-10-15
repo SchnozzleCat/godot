@@ -37,6 +37,7 @@
 #include "core/io/resource_importer.h"
 #include "core/io/resource_loader.h"
 #include "core/io/resource_saver.h"
+#include "core/io/resource_uid.h"
 #include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
 #include "core/os/keyboard.h"
@@ -49,6 +50,7 @@
 #include "editor/editor_node.h"
 #include "editor/editor_string_names.h"
 #include "editor/editor_undo_redo_manager.h"
+#include "editor/editor_vault.h"
 #include "editor/file_system/dependency_editor.h"
 #include "editor/gui/create_dialog.h"
 #include "editor/gui/directory_create_dialog.h"
@@ -72,6 +74,7 @@
 #include "scene/gui/label.h"
 #include "scene/gui/line_edit.h"
 #include "scene/gui/progress_bar.h"
+#include "scene/resources/image_texture.h"
 #include "scene/resources/packed_scene.h"
 #include "servers/display/display_server.h"
 
@@ -301,6 +304,7 @@ void FileSystemDock::_create_tree(TreeItem *p_parent, EditorFileSystemDirectory 
 			file_info.type = p_dir->get_file_type(i);
 			file_info.icon_path = p_dir->get_file_icon_path(i);
 			file_info.import_broken = !p_dir->get_file_import_is_valid(i);
+			file_info.vault_encrypted = p_dir->is_file_vault_encrypted(i);
 			file_info.modified_time = p_dir->get_file_modified_time(i);
 
 			file_list.push_back(file_info);
@@ -318,6 +322,9 @@ void FileSystemDock::_create_tree(TreeItem *p_parent, EditorFileSystemDirectory 
 			file_item->set_text(0, file_info.name);
 			file_item->set_structured_text_bidi_override(0, TextServer::STRUCTURED_TEXT_FILE);
 			file_item->set_icon(0, _get_tree_item_icon(!file_info.import_broken, file_info.type, file_info.icon_path));
+			if (EditorVault::is_encrypted(file_metadata)) {
+				file_item->set_icon(0, _apply_vault_badge(file_item->get_icon(0)));
+			}
 			if (da->is_link(file_metadata)) {
 				file_item->set_icon_overlay(0, get_editor_theme_icon(SNAME("LinkOverlay")));
 				// TRANSLATORS: This is a tooltip for a file that is a symbolic link to another file.
@@ -439,6 +446,9 @@ void FileSystemDock::_update_tree(const Vector<String> &p_uncollapsed_paths, boo
 			EditorFileSystemDirectory *dir = EditorFileSystem::get_singleton()->find_file(favorite, &index);
 			if (dir) {
 				icon = _get_tree_item_icon(dir->get_file_import_is_valid(index), dir->get_file_type(index), dir->get_file_icon_path(index));
+				if (dir->is_file_vault_encrypted(index)) {
+					icon = _apply_vault_badge(icon);
+				}
 			} else {
 				icon = get_editor_theme_icon(SNAME("File"));
 			}
@@ -893,7 +903,11 @@ void FileSystemDock::_file_list_thumbnail_done(const String &p_path, const Ref<T
 			}
 
 			if (thumbnail.is_valid()) {
-				files->set_item_icon(p_index, _apply_thumbnail_filter(thumbnail, p_path));
+				thumbnail = _apply_thumbnail_filter(thumbnail, p_path);
+				if (EditorVault::is_encrypted(p_path)) {
+					thumbnail = _apply_vault_badge(thumbnail);
+				}
+				files->set_item_icon(p_index, thumbnail);
 			}
 		}
 	}
@@ -902,7 +916,11 @@ void FileSystemDock::_file_list_thumbnail_done(const String &p_path, const Ref<T
 void FileSystemDock::_tree_thumbnail_done(const String &p_path, const Ref<Texture2D> &p_preview, const Ref<Texture2D> &p_small_preview, int p_update_id, ObjectID p_item) {
 	TreeItem *item = ObjectDB::get_instance<TreeItem>(p_item);
 	if (item && tree_update_id == p_update_id && p_small_preview.is_valid()) {
-		item->set_icon(0, _apply_thumbnail_filter(p_small_preview, p_path));
+		Ref<Texture2D> thumbnail = _apply_thumbnail_filter(p_small_preview, p_path);
+		if (EditorVault::is_encrypted(p_path)) {
+			thumbnail = _apply_vault_badge(thumbnail);
+		}
+		item->set_icon(0, thumbnail);
 	}
 }
 
@@ -931,6 +949,50 @@ Ref<Texture2D> FileSystemDock::_apply_thumbnail_filter(const Ref<Texture2D> &p_t
 	}
 
 	return p_thumbnail;
+}
+
+Ref<Texture2D> FileSystemDock::_apply_vault_badge(const Ref<Texture2D> &p_icon) const {
+	if (p_icon.is_null()) {
+		return p_icon;
+	}
+
+	// Cache per source icon instance (thumbnails are recreated on updates).
+	const ObjectID icon_id = p_icon->get_instance_id();
+	if (const Ref<Texture2D> *cached = vault_badge_cache.getptr(icon_id)) {
+		return *cached;
+	}
+
+	Ref<Image> img = p_icon->get_image();
+	if (img.is_null() || img->is_empty()) {
+		return p_icon;
+	}
+
+	Ref<Texture2D> lock = get_editor_theme_icon(SNAME("Lock"));
+	if (lock.is_null()) {
+		return p_icon;
+	}
+	Ref<Image> badge = lock->get_image();
+	if (badge.is_null() || badge->is_empty()) {
+		return p_icon;
+	}
+
+	Rect2i used = badge->get_used_rect();
+	if (used.size.x <= 0 || used.size.y <= 0) {
+		return p_icon;
+	}
+
+	// Keep the cache bounded.
+	if (vault_badge_cache.size() > 512) {
+		vault_badge_cache.clear();
+	}
+
+	img = img->duplicate();
+	Point2i pos = Point2i(img->get_width() - used.size.x - 2, img->get_height() - used.size.y - 2);
+	img->blend_rect(badge, used, pos);
+
+	Ref<Texture2D> out = ImageTexture::create_from_image(img);
+	vault_badge_cache[icon_id] = out;
+	return out;
 }
 
 void FileSystemDock::_toggle_file_display() {
@@ -988,6 +1050,7 @@ void FileSystemDock::_search(EditorFileSystemDirectory *p_path, List<FileInfo> *
 			file_info.type = p_path->get_file_type(i);
 			file_info.path = p_path->get_file_path(i);
 			file_info.import_broken = !p_path->get_file_import_is_valid(i);
+			file_info.vault_encrypted = p_path->is_file_vault_encrypted(i);
 			file_info.modified_time = p_path->get_file_modified_time(i);
 
 			if (_is_file_type_disabled_by_feature_profile(file_info.type)) {
@@ -1102,6 +1165,7 @@ void FileSystemDock::_update_file_list(bool p_keep_selection, const Vector<Strin
 					file_info.type = efd->get_file_type(index);
 					file_info.icon_path = efd->get_file_icon_path(index);
 					file_info.import_broken = !efd->get_file_import_is_valid(index);
+					file_info.vault_encrypted = efd->is_file_vault_encrypted(index);
 					file_info.modified_time = efd->get_file_modified_time(index);
 				} else {
 					file_info.type = "";
@@ -1213,6 +1277,9 @@ void FileSystemDock::_update_file_list(bool p_keep_selection, const Vector<Strin
 
 		// Select the icons.
 		type_icon = _get_tree_item_icon(!finfo->import_broken, finfo->type, finfo->icon_path);
+		if (finfo->vault_encrypted) {
+			type_icon = _apply_vault_badge(type_icon);
+		}
 		if (!finfo->import_broken) {
 			big_icon = file_thumbnail;
 		} else {
@@ -1569,6 +1636,13 @@ void FileSystemDock::_try_move_item(const FileOrFolder &p_item, const String &p_
 			err = da->rename(old_path + ".uid", new_path + ".uid");
 			if (err != OK) {
 				EditorNode::get_singleton()->add_io_error(TTR("Error moving:") + "\n" + old_path + ".uid\n");
+			}
+		}
+
+		if (p_item.is_file && FileAccess::exists(old_path + ".vault")) {
+			err = da->rename(old_path + ".vault", new_path + ".vault");
+			if (err != OK) {
+				EditorNode::get_singleton()->add_io_error(TTR("Error moving:") + "\n" + old_path + ".vault\n");
 			}
 		}
 
@@ -2691,6 +2765,60 @@ void FileSystemDock::_file_option(int p_option, const Vector<String> &p_selected
 			}
 		} break;
 
+		case FILE_MENU_TOGGLE_VAULT:
+		case FILE_MENU_ROTATE_VAULT_KEY: {
+			// Asset Vault: per-asset encryption toggle + key rotation.
+			// Writes/removes the ".vault" sidecar next to the source — the source
+			// itself always stays plaintext; encryption happens at export time.
+			Vector<String> vault_files;
+			for (const String &F : p_selected) {
+				if (!F.ends_with("/")) {
+					vault_files.push_back(F);
+				}
+			}
+			if (vault_files.is_empty()) {
+				break;
+			}
+
+			for (const String &F : vault_files) {
+				if (p_option == FILE_MENU_ROTATE_VAULT_KEY) {
+					if (EditorVault::rotate_key(F) != OK) {
+						EditorNode::get_singleton()->add_io_error(vformat(TTR("Vault: cannot rotate key for '%s'."), F));
+					}
+					EditorFileSystem::get_singleton()->update_file(F);
+					continue;
+				}
+
+				if (EditorVault::is_encrypted(F)) {
+					if (EditorVault::disable(F) != OK) {
+						EditorNode::get_singleton()->add_io_error(vformat(TTR("Vault: cannot remove encryption for '%s'."), F));
+					}
+				} else {
+					// Ensure the asset is uid-addressable: create the ".uid"
+					// sidecar for uid-less text resources (mirrors the
+					// EditorFileSystem::update_files flow).
+					ResourceUID::ID uid = EditorVault::get_asset_uid(F);
+					if (uid == ResourceUID::INVALID_ID && ResourceLoader::should_create_uid_file(F)) {
+						Ref<FileAccess> f = FileAccess::open(F + ".uid", FileAccess::WRITE);
+						if (f.is_valid()) {
+							uid = ResourceUID::get_singleton()->create_id_for_path(F);
+							ResourceUID::get_singleton()->add_id(uid, F);
+							f->store_line(ResourceUID::get_singleton()->id_to_text(uid));
+						}
+					}
+					if (uid == ResourceUID::INVALID_ID) {
+						EditorNode::get_singleton()->add_io_error(vformat(TTR("Vault: cannot encrypt '%s' because it has no UID."), F));
+						continue;
+					}
+					if (EditorVault::enable(F, uid) != OK) {
+						EditorNode::get_singleton()->add_io_error(vformat(TTR("Vault: cannot encrypt '%s'."), F));
+						continue;
+					}
+				}
+				EditorFileSystem::get_singleton()->update_file(F);
+			}
+		} break;
+
 		case FILE_MENU_NEW_RESOURCE: {
 			new_resource_dialog->popup_create(true);
 		} break;
@@ -3461,6 +3589,56 @@ void FileSystemDock::_file_and_folders_fill_popup(PopupMenu *p_popup, const Vect
 			p_popup->add_item(TTRC("View Owners..."), FILE_MENU_OWNERS);
 			p_popup->add_separator();
 		}
+
+		// Asset Vault: per-asset encryption for exported games (toggle + key
+		// rotation; writes ".vault" sidecars — sources always stay plaintext).
+		{
+			bool any_script = false;
+			bool all_uid = true;
+			// Seeded true: "all vaulted" is an AND over the selection (an empty
+			// selection is vacuously all-vaulted; the menu items below are gated
+			// on any_vaulted / !filenames.is_empty() anyway).
+			bool all_vaulted = true;
+			bool any_vaulted = false;
+			for (const String &F : filenames) {
+				if (F.ends_with(".gd") || F.ends_with(".gdc") || F.ends_with(".cs")) {
+					any_script = true;
+					continue;
+				}
+				if (ResourceLoader::get_resource_uid(F) == ResourceUID::INVALID_ID && !ResourceLoader::should_create_uid_file(F)) {
+					all_uid = false; // No uid and none can be created.
+				}
+				bool vaulted = EditorVault::is_encrypted(F);
+				all_vaulted = all_vaulted && vaulted;
+				any_vaulted = any_vaulted || vaulted;
+			}
+
+			// Scripts are never vault-encrypted (they have their own compiled
+			// script encryption): no vault actions at all when the selection
+			// contains one.
+			if (!any_script && !filenames.is_empty()) {
+				if (any_vaulted && all_vaulted) {
+					p_popup->add_icon_item(get_editor_theme_icon(SNAME("Lock")), TTRC("Remove Encryption"), FILE_MENU_TOGGLE_VAULT);
+				} else if (any_vaulted) {
+					p_popup->add_icon_item(get_editor_theme_icon(SNAME("Lock")), TTRC("Toggle Encryption"), FILE_MENU_TOGGLE_VAULT);
+				} else {
+					p_popup->add_icon_item(get_editor_theme_icon(SNAME("Lock")), TTRC("Encrypt Asset(s)"), FILE_MENU_TOGGLE_VAULT);
+				}
+				if (!all_uid) {
+					int idx = p_popup->get_item_index(FILE_MENU_TOGGLE_VAULT);
+					p_popup->set_item_disabled(idx, true);
+					p_popup->set_item_tooltip(idx, TTRC("Asset has no UID (unsupported for vault encryption)."));
+				}
+				if (any_vaulted) {
+					p_popup->add_icon_item(get_editor_theme_icon(SNAME("Lock")), TTRC("Rotate Encryption Key"), FILE_MENU_ROTATE_VAULT_KEY);
+					if (!all_vaulted || !all_uid) {
+						int idx = p_popup->get_item_index(FILE_MENU_ROTATE_VAULT_KEY);
+						p_popup->set_item_disabled(idx, true);
+						p_popup->set_item_tooltip(idx, TTRC("Rotate is only available when every selected asset is encrypted."));
+					}
+				}
+			}
+		}
 	}
 
 	if (p_paths.size() == 1 && p_display_path_dependent_options) {
@@ -4026,7 +4204,7 @@ bool FileSystemDock::_get_imported_files(const String &p_path, String &r_extensi
 	da->list_dir_begin();
 	String n = da->get_next();
 	while (!n.is_empty()) {
-		if (n != "." && n != ".." && !n.ends_with(".import")) {
+		if (n != "." && n != ".." && !n.ends_with(".import") && !n.ends_with(".vault")) {
 			String npath = p_path + n + (da->current_is_dir() ? "/" : "");
 			if (!_get_imported_files(npath, r_extension, r_files)) {
 				return false;

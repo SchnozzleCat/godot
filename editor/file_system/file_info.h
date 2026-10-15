@@ -50,6 +50,8 @@ struct FileInfo {
 	StringName type;
 	Vector<String> sources;
 	bool import_broken = false;
+	// Asset Vault: the asset is flagged encrypted (".vault" sidecar).
+	bool vault_encrypted = false;
 	uint64_t modified_time = 0;
 
 	bool operator<(const FileInfo &p_fi) const {

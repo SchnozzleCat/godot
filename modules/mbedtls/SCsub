@@ -43,7 +43,10 @@ if env["builtin_mbedtls"]:
         "entropy_poll.c",
         "error.c",
         "gcm.c",
-        "hkdf.c",
+        # "hkdf.c" is compiled as part of core/crypto instead (see
+        # core/crypto/SCsub); the linker would never pull it from this
+        # archive since nothing in this module's object graph references it,
+        # and core needs it reachable from libcore.a.
         "hmac_drbg.c",
         "md.c",
         "md5.c",

@@ -30,11 +30,43 @@
 
 #include "file_access_pack.h"
 
+#include "core/io/asset_vault.h"
 #include "core/io/file_access_encrypted.h"
+#include "core/io/file_access_memory.h"
 #include "core/io/file_access_patched.h"
+#include "core/io/vault_container.h"
 #include "core/object/script_language.h"
 #include "core/os/os.h"
 #include "core/version.h"
+
+#include <string.h>
+
+// Asset Vault: single-slot per-thread memo of the last decrypted container.
+//
+// Loading one vault asset opens the same container several times in a row
+// (uid and type hints, payload magic peeks by recognize_path, then the actual
+// load); without a memo, each open repeats the AES-128-GCM pass (~3.3 ms per
+// MB — over 100 ms per pass for a large texture). The redundant opens always
+// target the same container consecutively on one thread, so a single slot per
+// thread captures them with no lock and no policy (no LRU, no byte cap, no
+// invalidation). Slot identity (container md5, granted key) makes a hit
+// equivalent to "the exact key that verified these container bytes was
+// granted": with no key granted, or a different one, there is no hit, so
+// authorization semantics are identical with and without the memo, and
+// identical content always decrypts to the same plaintext, so returning a
+// memoized payload is safe even if packs were replaced underneath.
+struct VaultOpenMemo {
+	bool valid = false;
+	uint8_t md5[16] = {};
+	uint8_t key[VaultContainer::KEY_SIZE] = {};
+	Vector<uint8_t> plain; // Verified plaintext (kept alive via COW sharing).
+};
+static thread_local VaultOpenMemo vault_open_memo;
+
+static bool _vault_memo_match(const PackedData::PackedFile &p_pf, const uint8_t p_key[VaultContainer::KEY_SIZE]) {
+	VaultOpenMemo &memo = vault_open_memo;
+	return memo.valid && memcmp(memo.md5, p_pf.md5, sizeof(memo.md5)) == 0 && memcmp(memo.key, p_key, sizeof(memo.key)) == 0;
+}
 
 Error PackedData::add_pack(const String &p_path, bool p_replace_files, uint64_t p_offset, const Vector<uint8_t> &p_decryption_key) {
 	for (int i = 0; i < sources.size(); i++) {
@@ -46,7 +78,7 @@ Error PackedData::add_pack(const String &p_path, bool p_replace_files, uint64_t 
 	return ERR_FILE_UNRECOGNIZED;
 }
 
-void PackedData::add_path(const String &p_pkg_path, const String &p_path, uint64_t p_ofs, uint64_t p_size, const uint8_t *p_md5, PackSource *p_src, bool p_replace_files, bool p_encrypted, bool p_bundle, bool p_delta, const String &p_salt) {
+void PackedData::add_path(const String &p_pkg_path, const String &p_path, uint64_t p_ofs, uint64_t p_size, const uint8_t *p_md5, PackSource *p_src, bool p_replace_files, bool p_encrypted, bool p_bundle, bool p_delta, const String &p_salt, bool p_vault) {
 	String simplified_path = p_path.simplify_path().trim_prefix("res://");
 	PathMD5 pmd5(simplified_path.md5_buffer());
 
@@ -56,6 +88,7 @@ void PackedData::add_path(const String &p_pkg_path, const String &p_path, uint64
 	pf.encrypted = p_encrypted;
 	pf.bundle = p_bundle;
 	pf.delta = p_delta;
+	pf.vault = p_vault;
 	pf.pack = p_pkg_path;
 	pf.salt = p_salt;
 	pf.offset = p_ofs;
@@ -366,7 +399,7 @@ bool PackedSourcePCK::try_open_pack(const String &p_path, bool p_replace_files, 
 		if (flags & PACK_FILE_REMOVAL) { // The file was removed.
 			PackedData::get_singleton()->remove_path(path);
 		} else {
-			PackedData::get_singleton()->add_path(p_path, path, file_base + ofs, size, md5, this, p_replace_files, (flags & PACK_FILE_ENCRYPTED), sparse_bundle, (flags & PACK_FILE_DELTA), salt);
+			PackedData::get_singleton()->add_path(p_path, path, file_base + ofs, size, md5, this, p_replace_files, (flags & PACK_FILE_ENCRYPTED), sparse_bundle, (flags & PACK_FILE_DELTA), salt, (flags & PACK_FILE_VAULT));
 		}
 	}
 
@@ -375,6 +408,12 @@ bool PackedSourcePCK::try_open_pack(const String &p_path, bool p_replace_files, 
 
 Ref<FileAccess> PackedSourcePCK::get_file(const String &p_path, PackedData::PackedFile *p_file, const Vector<uint8_t> &p_decryption_key) {
 	Ref<FileAccess> file(memnew(FileAccessPack(p_path, *p_file, p_decryption_key)));
+
+	if (p_file->vault && !file->is_open()) {
+		// Vault open failed (no granted key / bad key); the specific error was
+		// already reported by FileAccessPack. Fail the open cleanly.
+		return Ref<FileAccess>();
+	}
 
 	if (PackedData::get_singleton()->has_delta_patches(p_path)) {
 		Ref<FileAccessPatched> file_patched;
@@ -433,6 +472,9 @@ Error FileAccessPack::open_internal(const String &p_path, int p_mode_flags) {
 }
 
 bool FileAccessPack::is_open() const {
+	if (vault_failed) {
+		return false;
+	}
 	if (f.is_valid()) {
 		return f->is_open();
 	} else {
@@ -577,8 +619,131 @@ FileAccessPack::FileAccessPack(const String &p_path, const PackedData::PackedFil
 		f = fae;
 		off = 0;
 	}
+
+	if (pf.vault) {
+		if (_open_vault() != OK) {
+			// The specific error was already reported by _open_vault(); make the
+			// file unusable so any subsequent operation fails cleanly.
+			f.unref();
+			pf.size = 0;
+		}
+		pos = 0;
+		eof = false;
+		return;
+	}
+
 	pos = 0;
 	eof = false;
+}
+
+Error FileAccessPack::_open_vault() {
+	// Plaintext header first (cheap: 64 bytes, no key needed): it carries the
+	// uid, so the granted key can be looked up before touching the payload.
+	// Needed both for the decrypt-cache lookup and the key check, which must
+	// happen no matter what (cached or not) so authorization semantics stay
+	// identical with or without the cache.
+	const uint64_t container_start = f->get_position();
+	uint8_t hdr_buf[VaultContainer::HEADER_SIZE] = {};
+	{
+		uint64_t got = f->get_buffer(hdr_buf, VaultContainer::HEADER_SIZE);
+		if (got < VaultContainer::HEADER_SIZE) {
+			vault_failed = true;
+			ERR_FAIL_V_MSG(ERR_FILE_CORRUPT, vformat(R"(Vault: short read of container "%s" from pack "%s".)", path, pf.pack));
+		}
+	}
+	VaultContainer::Header hdr;
+	Error err = VaultContainer::parse_header(hdr_buf, sizeof(hdr_buf), hdr);
+	if (err != OK) {
+		vault_failed = true;
+		ERR_FAIL_V_MSG(ERR_FILE_CORRUPT, vformat(R"(Vault: invalid container for "%s" from pack "%s" — not a GVAU v1 AES-128-GCM file.)", path, pf.pack));
+	}
+
+	String uid_text = ResourceUID::get_singleton()->id_to_text(hdr.uid);
+
+	if (AssetVault::get_singleton() == nullptr) {
+		// Should not happen (the singleton is registered before any pack is
+		// opened); guarded so a broken core-setup order fails cleanly.
+		vault_failed = true;
+		PackedData::get_singleton()->vault_error = ERR_UNCONFIGURED;
+		ERR_FAIL_V_MSG(ERR_UNCONFIGURED, vformat(R"(Vault: the AssetVault singleton is not registered while loading "%s" from pack "%s".)", path, pf.pack));
+	}
+
+	uint8_t key[VaultContainer::KEY_SIZE] = {};
+	err = AssetVault::get_singleton()->get_key_bytes(hdr.uid, key);
+	if (err == ERR_UNAUTHORIZED) {
+		vault_failed = true;
+		PackedData::get_singleton()->vault_error = ERR_UNAUTHORIZED;
+		ERR_FAIL_V_MSG(ERR_UNAUTHORIZED, vformat(R"(Vault: no key granted for %s while loading "%s" from pack "%s".)", uid_text, path, pf.pack));
+	}
+	if (err != OK) {
+		vault_failed = true;
+		PackedData::get_singleton()->vault_error = err;
+		ERR_FAIL_V_MSG(err, vformat(R"(Vault: key lookup failed for %s while loading "%s" from pack "%s".)", uid_text, path, pf.pack));
+	}
+
+	// Decrypt-memo fast path (see vault_open_memo): the redundant opens that
+	// loader introspection performs all target this container consecutively
+	// with the same key; a hit replaces an identical AES-GCM pass.
+	if (_vault_memo_match(pf, key)) {
+		Vector<uint8_t> cached = vault_open_memo.plain; // COW: refcount bump.
+		Ref<FileAccessMemory> fam;
+		fam.instantiate();
+		fam->open_custom(cached.ptr(), cached.size());
+		f = fam;
+		vault_data = cached; // COW: shares the memo buffer; nobody writes it.
+		pf.size = vault_data.size();
+		off = 0; // The decrypted stream is memory-backed; no pack offset applies.
+		return OK;
+	}
+
+	// Memo miss: read the whole GVAU container (GCM needs the full stream to
+	// verify the tag), starting over from the container's beginning.
+	f->seek(container_start);
+	Vector<uint8_t> container;
+	container.resize(pf.size);
+	{
+		uint8_t *w = container.ptrw();
+		uint64_t read_total = 0;
+		while (read_total < pf.size) {
+			uint64_t got = f->get_buffer(w + read_total, pf.size - read_total);
+			if (got == 0) {
+				vault_failed = true;
+				ERR_FAIL_V_MSG(ERR_FILE_CORRUPT, vformat(R"(Vault: short read of container "%s" from pack "%s".)", path, pf.pack));
+			}
+			read_total += got;
+		}
+	}
+
+	Vector<uint8_t> plain;
+	err = VaultContainer::decrypt(plain, container, key);
+	if (err == ERR_FILE_CORRUPT) {
+		vault_failed = true;
+		PackedData::get_singleton()->vault_error = err;
+		ERR_FAIL_V_MSG(err, vformat(R"(Vault: decryption failed for %s (key tag %d) while loading "%s" from pack "%s" — invalid key or tampered payload. Check that the granted key was derived for key tag %d.)", uid_text, hdr.key_tag, path, pf.pack, hdr.key_tag));
+	}
+	if (err != OK) {
+		vault_failed = true;
+		PackedData::get_singleton()->vault_error = err;
+		ERR_FAIL_V_MSG(err, vformat(R"(Vault: decryption failed for %s while loading "%s" from pack "%s".)", uid_text, path, pf.pack));
+	}
+
+	// Memoize the verified plaintext (COW, no copy) for the consecutive opens
+	// that follow, then hand its buffer to the memory-backed accessor.
+	{
+		VaultOpenMemo &memo = vault_open_memo;
+		memcpy(memo.md5, pf.md5, sizeof(memo.md5));
+		memcpy(memo.key, key, sizeof(memo.key));
+		memo.plain = plain; // COW: shares p_plain's buffer, no copy.
+		memo.valid = true;
+	}
+	Ref<FileAccessMemory> fam;
+	fam.instantiate();
+	fam->open_custom(plain.ptr(), plain.size());
+	f = fam;
+	vault_data = plain; // Must outlive fam (it reads the buffer in place).
+	pf.size = plain.size();
+	off = 0; // The decrypted stream is memory-backed; no pack offset applies.
+	return OK;
 }
 
 //////////////////////////////////////////////////////////////////////////////////

@@ -1738,7 +1738,7 @@ Vector<String> ResourceLoader::list_directory(const String &p_directory) {
 				recognized = true;
 			}
 		} else {
-			if (d.ends_with(".import") || d.ends_with(".remap") || d.ends_with(".uid")) {
+			if (d.ends_with(".import") || d.ends_with(".remap") || d.ends_with(".uid") || d.ends_with(".vault")) {
 				d = d.substr(0, d.rfind_char('.'));
 			}
 
